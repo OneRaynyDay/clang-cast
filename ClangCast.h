@@ -20,17 +20,40 @@
 namespace clang {
 namespace cppcast {
 
-enum CXXCast {
+enum CXXCast : std::uint8_t {
+  // We put DynamicCast at the beginning for now to catch errors
+  CC_DynamicCast,
   // TODO comment
   CC_ConstCast,
   CC_StaticCast,
   CC_ReinterpretCast,
-  CC_DynamicCast,
   CC_InvalidCast
 };
 
-CXXCast getCastType(CastExpr* CastExpression) {
-  switch(CastExpression->getCastKind()) {
+// forward declare for helper
+CXXCast getCastType(const CastKind);
+namespace details {
+
+CXXCast castHelper(const Expr* Expression, CXXCast Cast) {
+  const auto* CastExpression = dyn_cast<CastExpr>(Expression);
+
+  // If it's not a cast expression, we've gone too far.
+  if (!CastExpression)
+    return Cast;
+
+  Cast = std::max(Cast, cppcast::getCastType(CastExpression->getCastKind()));
+  return castHelper(CastExpression->getSubExpr(), Cast);
+}
+
+} // namespace details
+
+// Recursively demote from const cast level.
+CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
+  return details::castHelper(CastExpression, CXXCast::CC_ConstCast);
+}
+
+CXXCast getCastType(const CastKind CastType) {
+  switch(CastType) {
     /// Reinterpret cast types
     case CastKind::CK_BitCast:
       llvm::outs() << "Type: bitcast\n";
@@ -118,7 +141,8 @@ CXXCast getCastType(CastExpr* CastExpression) {
 
       /// const cast type
     case CastKind::CK_NoOp:
-      // https://godbolt.org/z/d-s9hg
+      llvm::outs() << "No op cast.\n";
+    // https://godbolt.org/z/d-s9hg
     case CastKind::CK_ArrayToPointerDecay:
       return CXXCast::CC_ConstCast;
 
