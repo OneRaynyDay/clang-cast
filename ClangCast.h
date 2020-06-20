@@ -61,14 +61,13 @@ CXXCast getCastType(const CastKind CastType) {
       llvm::outs() << "Type: bitcast\n";
     case CastKind::CK_LValueToRValueBitCast:
       llvm::outs() << "Type: bitcast\n";
-      // https://godbolt.org/z/46gxUf
+    // https://godbolt.org/z/46gxUf
     case CastKind::CK_ReinterpretMemberPointer:
       // https://godbolt.org/z/Ra8pbF
     case CastKind::CK_PointerToIntegral:
       return CXXCast::CC_ReinterpretCast;
 
       /// Static cast types
-    case CastKind::CK_LValueToRValue:
     case CastKind::CK_BaseToDerived:
     case CastKind::CK_DerivedToBase:
       // TODO: Understand what this means
@@ -144,6 +143,7 @@ CXXCast getCastType(const CastKind CastType) {
       llvm::outs() << "No op cast.\n";
     // https://godbolt.org/z/d-s9hg
     case CastKind::CK_ArrayToPointerDecay:
+    case CastKind::CK_LValueToRValue:
       return CXXCast::CC_ConstCast;
 
       /// dynamic cast type
