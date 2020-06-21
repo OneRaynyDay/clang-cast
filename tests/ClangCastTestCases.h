@@ -42,7 +42,7 @@ void f() {
 /// Static cast types
 static const char BaseToDerived[] = R"(
 class A {};
-class B: A {};
+class B: public A {};
 
 void f() {
   A* a = nullptr;
@@ -51,7 +51,7 @@ void f() {
 )";
 static const char DerivedToBase[] = R"(
 class A {};
-class B: A {};
+class B: public A {};
 
 void f() {
   B* b = nullptr;
@@ -276,6 +276,26 @@ void f() {
   int y = x;
 }
 )";
+
+namespace edgecases {
+
+static const char BaseToDerivedPrivateSpecifier[] = R"(
+struct A { int i; };
+struct Pad { int i; };
+class B: Pad, A {};
+
+B* foo(A *a) { return (B*)(a); }
+)";
+
+static const char DerivedToBasePrivateSpecifier[] = R"(
+struct A { int i; };
+struct Pad { int i; };
+class B: Pad, A {};
+
+A* foo(B *b) { return (A*)(b); }
+)";
+
+} // namespace edgecases
 
 } // namespace testcases
 

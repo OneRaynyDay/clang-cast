@@ -38,7 +38,7 @@ struct CStyleCastCollector : MatchFinder::MatchCallback {
       return;
     }
     // traverse the expr tree and get cast kinds
-    const CastExpr* GenericCastExpr = Expr;
+    const CastExpr* GenericCastExpr = dyn_cast<CastExpr>(Expr);
     while(GenericCastExpr) {
       CastKinds.insert(GenericCastExpr->getCastKind());
       GenericCastExpr = dyn_cast<CastExpr>(GenericCastExpr->getSubExpr());
@@ -107,6 +107,7 @@ TEST_F(ClangCastTest, TestReinterpretCastTypes) {
 
 TEST_F(ClangCastTest, TestStaticCastTypes) {
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(BaseToDerived, StaticCast);
+  // Special case: C-style cannot be converted
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(DerivedToBase, StaticCast);
 //  CLANG_CAST_CHECK_SINGLE_TEST_CASE(UncheckedDerivedToBase, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(FunctionToPointerDecay, StaticCast);
@@ -138,4 +139,22 @@ TEST_F(ClangCastTest, TestStaticCastTypes) {
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(IntegralComplexCast, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(IntegralComplexToFloatingComplex, StaticCast);
 
+}
+
+TEST_F(ClangCastTest, TestEdgeCases) {
+  using namespace edgecases;
+  {
+    auto res = parse(DerivedToBasePrivateSpecifier);
+    ASSERT_GE(res.first.size(), 1);
+    ASSERT_GE(res.second.size(), 1);
+    ASSERT_TRUE(res.first.find(CastKind::CK_DerivedToBase) != res.first.end());
+    ASSERT_EQ(res.second[0], CXXCast::CC_InvalidCast);
+  }
+  {
+    auto res = parse(BaseToDerivedPrivateSpecifier);
+    ASSERT_GE(res.first.size(), 1);
+    ASSERT_GE(res.second.size(), 1);
+    ASSERT_TRUE(res.first.find(CastKind::CK_BaseToDerived) != res.first.end());
+    ASSERT_EQ(res.second[0], CXXCast::CC_InvalidCast);
+  }
 }

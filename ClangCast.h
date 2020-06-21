@@ -10,6 +10,7 @@
 
 #include <exception>
 #include "clang/AST/ASTConsumer.h"
+#include "clang/AST/DeclCXX.h"
 #include "clang/AST/OperationKinds.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -31,28 +32,101 @@ enum CXXCast : std::uint8_t {
 };
 
 // forward declare for helper
-CXXCast getCastType(const CastKind);
+CXXCast getCastType(const CastExpr* CastExpression,
+                    const QualType& CanonicalSubExprType,
+                    const QualType& CanonicalCastType);
+
 namespace details {
 
-CXXCast castHelper(const Expr* Expression, CXXCast Cast) {
+// CanonicalBase/Derived is assumed to be canonical
+bool isAccessible(const CXXRecordDecl* Base,
+                  const CXXRecordDecl* Derived) {
+  // This should not happen
+  // TODO log
+  if (!Base || !Derived) {
+    return false;
+  }
+
+  for (const CXXBaseSpecifier &Specifier : Derived->bases()) {
+    // This should already be canonical
+    const QualType& BaseType = Specifier.getType();
+    CXXRecordDecl* BaseClass = BaseType.getTypePtrOrNull()->getAsCXXRecordDecl();
+
+    // This should not happen
+    // TODO log
+    if (!BaseClass) {
+      continue;
+    }
+
+    if(clang::declaresSameEntity(BaseClass, Base)) {
+      return Specifier.getAccessSpecifier() ==
+             clang::AccessSpecifier::AS_public;
+    }
+  }
+  // This should never occur
+  // TODO log
+  return false;
+}
+
+CXXCast castHelper(const Expr* Expression,
+                   CXXCast Cast,
+                   const QualType& CanonicalSubExprType,
+                   const QualType& CanonicalCastType) {
   const auto* CastExpression = dyn_cast<CastExpr>(Expression);
 
   // If it's not a cast expression, we've gone too far.
   if (!CastExpression)
     return Cast;
+  // If it's a cast expression but is not a part of the explicit c-style cast,
+  // we've also gone too far.
+  const auto* ImplicitCastExpression = dyn_cast<ImplicitCastExpr>(Expression);
+  if (ImplicitCastExpression && !ImplicitCastExpression->isPartOfExplicitCast())
+    return Cast;
 
-  Cast = std::max(Cast, cppcast::getCastType(CastExpression->getCastKind()));
-  return castHelper(CastExpression->getSubExpr(), Cast);
+  Cast = std::max(Cast, cppcast::getCastType(CastExpression,
+                                             CanonicalSubExprType,
+                                             CanonicalCastType));
+  return castHelper(CastExpression->getSubExpr(),
+                    Cast,
+                    CanonicalSubExprType,
+                    CanonicalCastType);
 }
 
 } // namespace details
 
 // Recursively demote from const cast level.
 CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
-  return details::castHelper(CastExpression, CXXCast::CC_ConstCast);
+  if (!CastExpression)
+    return CXXCast::CC_InvalidCast;
+
+  const Expr* SubExpression = CastExpression->getSubExprAsWritten();
+  if (!SubExpression)
+    return CXXCast::CC_InvalidCast;
+
+  QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
+  QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
+
+  return details::castHelper(CastExpression,
+                             CXXCast::CC_ConstCast,
+                             CanonicalSubExpressionType,
+                             CanonicalCastType);
 }
 
-CXXCast getCastType(const CastKind CastType) {
+CXXCast getBaseDerivedCast(const CXXRecordDecl* Base, const CXXRecordDecl* Derived) {
+  // TODO log
+  if (!Base || !Derived) {
+    return CXXCast::CC_InvalidCast;
+  }
+  if (!details::isAccessible(Base, Derived))
+    return CXXCast::CC_InvalidCast;
+  else
+    return CXXCast::CC_StaticCast;
+}
+
+CXXCast getCastType(const CastExpr* CastExpression,
+                    const QualType& CanonicalSubExprType,
+                    const QualType& CanonicalCastType) {
+  const CastKind CastType = CastExpression->getCastKind();
   switch(CastType) {
     /// Reinterpret cast types
     case CastKind::CK_BitCast:
@@ -67,11 +141,31 @@ CXXCast getCastType(const CastKind CastType) {
     case CastKind::CK_PointerToIntegral:
       return CXXCast::CC_ReinterpretCast;
 
-      /// Static cast types
-    case CastKind::CK_BaseToDerived:
-    case CastKind::CK_DerivedToBase:
-      // TODO: Understand what this means
-    case CastKind::CK_UncheckedDerivedToBase:
+    /// Static cast types
+    case CastKind::CK_DerivedToBase: {
+      // Special case:
+      // The base class A is inaccessible (private)
+      // so we can't static_cast. We can't reinterpret_cast
+      // either because reinterpret casting to A* would point
+      // to the data segment owned by Pad. We can't convert to C-style
+      // in this case.
+      //
+      // struct A { int i; };
+      // struct Pad { int i; };
+      // class B: Pad, A {};
+      //
+      // A *f(B *b) { return (A*)(b); }
+      //
+      // We assume that the base class is unambiguous.
+      const CXXRecordDecl* Base = CanonicalCastType.getTypePtr()->getPointeeCXXRecordDecl();
+      const CXXRecordDecl* Derived = CanonicalSubExprType.getTypePtr()->getPointeeCXXRecordDecl();
+      return getBaseDerivedCast(Base, Derived);
+    }
+    case CastKind::CK_BaseToDerived: {
+      const CXXRecordDecl* Base = CanonicalSubExprType.getTypePtr()->getPointeeCXXRecordDecl();
+      const CXXRecordDecl* Derived = CanonicalCastType.getTypePtr()->getPointeeCXXRecordDecl();
+      return getBaseDerivedCast(Base, Derived);
+    }
       // https://godbolt.org/z/3p2vFW
     case CastKind::CK_FunctionToPointerDecay:
       // https://godbolt.org/z/AMpyLr
@@ -80,6 +174,7 @@ CXXCast getCastType(const CastKind CastType) {
     case CastKind::CK_NullToMemberPointer:
       // For the 3 below: https://godbolt.org/z/46gxUf
       // For reference: https://en.cppreference.com/w/cpp/language/pointer#Pointers_to_data_members
+    // TODO need to do access check here
     case CastKind::CK_BaseToDerivedMemberPointer:
     case CastKind::CK_DerivedToBaseMemberPointer:
     case CastKind::CK_MemberPointerToBoolean:
@@ -150,7 +245,9 @@ CXXCast getCastType(const CastKind CastType) {
     case CastKind::CK_Dynamic:
       return CXXCast::CC_DynamicCast;
 
-      /// Invalid cast types for C-style casts
+    // TODO: Investigate whether this will ever happen in C-style cast.
+    case CastKind::CK_UncheckedDerivedToBase:
+    /// Invalid cast types for C-style casts
       // TODO: It seems like the gcc extension doesn't work on neither
       // clang nor gcc: https://godbolt.org/z/NtDrA7.
       // link to the extension: https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html
