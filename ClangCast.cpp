@@ -14,9 +14,7 @@ class CStyleCastPrinter : public MatchFinder::MatchCallback {
   virtual void run(const MatchFinder::MatchResult& Result) {
     ASTContext *Context = Result.Context;
     const CStyleCastExpr* CastExpression = Result.Nodes.getNodeAs<CStyleCastExpr>("cast");
-
     getCastKindFromCStyleCast(CastExpression);
-
     if (!CastExpression)
       return;
 

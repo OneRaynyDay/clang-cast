@@ -21,13 +21,65 @@
 namespace clang {
 namespace cppcast {
 
+/// Enumerations for cast types
+/// The ordering of these enums is important.
+///
+/// C-style casts in clang are performed incrementally:
+/// - CStyleCastExpr
+///   - ImplicitCastExpr
+///     - ImplicitCastExpr
+///     ...
+///       - DeclRefExpr (for example)
+///
+/// Each one of the cast exprs may require a more "powerful" level of
+/// casting. With the exception of dynamic cast, the rest are ordered
+/// accordingly.
+///
+/// CC_DynamicCast
+/// --------------
+/// dynamic_cast<Base*>(derived_ptr);
+/// A conversion from Base to Derived or vice versa that is
+/// performed at RUNTIME. This is not possible to be expressed
+/// in terms of C-style casts.
+///
+/// CC_ConstCast
+/// ------------
+/// int x = 1;
+/// const int& y = x;
+/// const_cast<int&>(y);
+/// A conversion from the same time but with different qualifiers.
+///
+/// CC_StaticCast
+/// -------------
+/// static_cast<int>(true);
+/// Static cast can perform implicit conversions between types,
+/// call explicitly defined conversion functions such as operator(),
+/// and cast up and down an inheritance hierarchy (given access),
+/// and more.
+///
+/// CC_CStyleCast
+/// -------------
+/// (bool) 0;
+/// There are some cases where none of the above casts are possible,
+/// or suitable for replacement for C-style casts, such as when
+/// static_cast cannot cast DerivedToBase due to insufficient access,
+/// or C-style casting templated types (which can be any of the casts
+/// enumerated above, including the DerivedToBase case). It is generally
+/// good to convert all C-style casts to something of lower power, but
+/// sometimes it's not possible.
+///
+/// CC_InvalidCast
+/// --------------
+/// This maps to the set of CastKind::CK_* that are not possible to
+/// generate in C++. If this enum is encountered, something is wrong.
+///
+/// Please refer to getCastType and castHelper for more information.
 enum CXXCast : std::uint8_t {
-  // We put DynamicCast at the beginning for now to catch errors
   CC_DynamicCast,
-  // TODO comment
   CC_ConstCast,
   CC_StaticCast,
   CC_ReinterpretCast,
+  CC_CStyleCast,
   CC_InvalidCast
 };
 
@@ -38,13 +90,19 @@ CXXCast getCastType(const CastExpr* CastExpression,
 
 namespace details {
 
-// CanonicalBase/Derived is assumed to be canonical
+/// Determines whether Base is accessible from Derived class.
+///
+/// \returns true if Base is accessible from Derived or are the same class, and
+///          false if Base is not accessible from Derived or are
+///          unrelated classes
 bool isAccessible(const CXXRecordDecl* Base,
                   const CXXRecordDecl* Derived) {
-  // This should not happen
-  // TODO log
-  if (!Base || !Derived) {
+  if (!Base || !Derived)
     return false;
+
+  if(clang::declaresSameEntity(Derived, Base)) {
+    // The class's contents is always accessible to itself.
+    return true;
   }
 
   for (const CXXBaseSpecifier &Specifier : Derived->bases()) {
@@ -52,22 +110,35 @@ bool isAccessible(const CXXRecordDecl* Base,
     const QualType& BaseType = Specifier.getType();
     CXXRecordDecl* BaseClass = BaseType.getTypePtrOrNull()->getAsCXXRecordDecl();
 
-    // This should not happen
-    // TODO log
-    if (!BaseClass) {
-      continue;
-    }
-
-    if(clang::declaresSameEntity(BaseClass, Base)) {
-      return Specifier.getAccessSpecifier() ==
-             clang::AccessSpecifier::AS_public;
-    }
+    if(Specifier.getAccessSpecifier() == clang::AccessSpecifier::AS_public &&
+            isAccessible(Base, BaseClass))
+      return true;
   }
-  // This should never occur
-  // TODO log
+
+  // These two are unrelated classes.
   return false;
 }
 
+/// Determines the proper cast type for a Base to/from Derived conversion
+/// based off of accessbility.
+///
+/// \return CXXCast enum corresponding to the lowest power cast required.
+CXXCast getBaseDerivedCast(const CXXRecordDecl* Base, const CXXRecordDecl* Derived) {
+  if (!Base || !Derived) {
+    return CXXCast::CC_CStyleCast;
+  }
+  if (!details::isAccessible(Base, Derived))
+    return CXXCast::CC_CStyleCast;
+  else
+    return CXXCast::CC_StaticCast;
+}
+
+
+/// A helper function for getCastKindFromCStyleCast, which
+/// determines the least power of cast required by recursing
+/// CastExpr AST nodes until a non-cast expression has been reached.
+///
+/// \return CXXCast enum corresponding to the lowest power cast required.
 CXXCast castHelper(const Expr* Expression,
                    CXXCast Cast,
                    const QualType& CanonicalSubExprType,
@@ -94,7 +165,8 @@ CXXCast castHelper(const Expr* Expression,
 
 } // namespace details
 
-// Recursively demote from const cast level.
+/// Main function for determining CXX cast type.
+/// Recursively demote from const cast level.
 CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
   if (!CastExpression)
     return CXXCast::CC_InvalidCast;
@@ -112,17 +184,12 @@ CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
                              CanonicalCastType);
 }
 
-CXXCast getBaseDerivedCast(const CXXRecordDecl* Base, const CXXRecordDecl* Derived) {
-  // TODO log
-  if (!Base || !Derived) {
-    return CXXCast::CC_InvalidCast;
-  }
-  if (!details::isAccessible(Base, Derived))
-    return CXXCast::CC_InvalidCast;
-  else
-    return CXXCast::CC_StaticCast;
-}
-
+/// Given a CastExpr, determine from its CastKind and other metadata
+/// the corresponding CXXCast to use.
+/// Note that it's a CastExpr, which can be either CStyleCastExpr
+/// or ImplicitCastExpr or any of its children.
+///
+/// \return CXXCast corresponding to the type of conversion.
 CXXCast getCastType(const CastExpr* CastExpression,
                     const QualType& CanonicalSubExprType,
                     const QualType& CanonicalCastType) {
@@ -130,18 +197,15 @@ CXXCast getCastType(const CastExpr* CastExpression,
   switch(CastType) {
     /// Reinterpret cast types
     case CastKind::CK_BitCast:
-      llvm::outs() << "Type: bitcast\n";
     case CastKind::CK_LValueBitCast:
-      llvm::outs() << "Type: bitcast\n";
     case CastKind::CK_LValueToRValueBitCast:
-      llvm::outs() << "Type: bitcast\n";
-    // https://godbolt.org/z/46gxUf
     case CastKind::CK_ReinterpretMemberPointer:
-      // https://godbolt.org/z/Ra8pbF
     case CastKind::CK_PointerToIntegral:
       return CXXCast::CC_ReinterpretCast;
 
     /// Static cast types
+    // This cannot be expressed in the form of a C-style cast.
+    case CastKind::CK_UncheckedDerivedToBase:
     case CastKind::CK_DerivedToBase: {
       // Special case:
       // The base class A is inaccessible (private)
@@ -159,42 +223,28 @@ CXXCast getCastType(const CastExpr* CastExpression,
       // We assume that the base class is unambiguous.
       const CXXRecordDecl* Base = CanonicalCastType.getTypePtr()->getPointeeCXXRecordDecl();
       const CXXRecordDecl* Derived = CanonicalSubExprType.getTypePtr()->getPointeeCXXRecordDecl();
-      return getBaseDerivedCast(Base, Derived);
+      return details::getBaseDerivedCast(Base, Derived);
     }
     case CastKind::CK_BaseToDerived: {
       const CXXRecordDecl* Base = CanonicalSubExprType.getTypePtr()->getPointeeCXXRecordDecl();
       const CXXRecordDecl* Derived = CanonicalCastType.getTypePtr()->getPointeeCXXRecordDecl();
-      return getBaseDerivedCast(Base, Derived);
+      return details::getBaseDerivedCast(Base, Derived);
     }
-      // https://godbolt.org/z/3p2vFW
     case CastKind::CK_FunctionToPointerDecay:
-      // https://godbolt.org/z/AMpyLr
     case CastKind::CK_NullToPointer:
-      // https://godbolt.org/z/Kx0JbH
     case CastKind::CK_NullToMemberPointer:
-      // For the 3 below: https://godbolt.org/z/46gxUf
-      // For reference: https://en.cppreference.com/w/cpp/language/pointer#Pointers_to_data_members
-    // TODO need to do access check here
     case CastKind::CK_BaseToDerivedMemberPointer:
     case CastKind::CK_DerivedToBaseMemberPointer:
     case CastKind::CK_MemberPointerToBoolean:
-      // For the 2 below
-      // https://godbolt.org/z/eLdthQ
     case CastKind::CK_UserDefinedConversion:
     case CastKind::CK_ConstructorConversion:
-      // For the 2 below
-      // https://godbolt.org/z/Ra8pbF
     case CastKind::CK_IntegralToPointer:
-      // NOTE: It's interesting how pointer->bool is static while
-      //    pointer->integral is reinterpret.
     case CastKind::CK_PointerToBoolean:
-      // https://godbolt.org/z/c9s-ws
     case CastKind::CK_ToVoid:
-      // https://godbolt.org/z/W-an5j
-      // vector splats are constant size vectors that can be
-      // broadcast assigned a single value.
+    // vector splats are constant size vectors that can be
+    // broadcast assigned a single value.
     case CastKind::CK_VectorSplat:
-      // Common integral/float cast types
+    // Common integral/float cast types
     case CastKind::CK_IntegralCast:
     case CastKind::CK_IntegralToBoolean:
     case CastKind::CK_IntegralToFloating:
@@ -206,59 +256,53 @@ CXXCast getCastType(const CastExpr* CastExpression,
     case CastKind::CK_FloatingToBoolean:
     case CastKind::CK_BooleanToSignedIntegral:
     case CastKind::CK_FloatingCast:
-      // Floating complex cast types
-      // https://godbolt.org/z/cZ9yBp
+    // Floating complex cast types
     case CastKind::CK_FloatingRealToComplex:
     case CastKind::CK_FloatingComplexToReal:
     case CastKind::CK_FloatingComplexToBoolean:
     case CastKind::CK_FloatingComplexCast:
     case CastKind::CK_FloatingComplexToIntegralComplex:
-      // Integral complex cast types
-      // TODO: There is a bug. The last 3 examples
-      //  should only be static_cast'able.
-      // https://godbolt.org/z/ny-9jc
+    // Integral complex cast types
     case CastKind::CK_IntegralRealToComplex:
     case CastKind::CK_IntegralComplexToReal:
     case CastKind::CK_IntegralComplexToBoolean:
     case CastKind::CK_IntegralComplexCast:
     case CastKind::CK_IntegralComplexToFloatingComplex:
-      // Atomic to non-atomic casts
-      // https://godbolt.org/z/6ayZ2V
+    // Atomic to non-atomic casts
     case CastKind::CK_AtomicToNonAtomic:
     case CastKind::CK_NonAtomicToAtomic:
-      // OpenCL casts
-      // https://godbolt.org/z/DEz8Rs
+    // OpenCL casts
+    // https://godbolt.org/z/DEz8Rs
     case CastKind::CK_ZeroToOCLOpaqueType:
     case CastKind::CK_AddressSpaceConversion:
     case CastKind::CK_IntToOCLSampler:
       return CXXCast::CC_StaticCast;
 
-      /// const cast type
+    /// const cast type
     case CastKind::CK_NoOp:
-      llvm::outs() << "No op cast.\n";
-    // https://godbolt.org/z/d-s9hg
     case CastKind::CK_ArrayToPointerDecay:
     case CastKind::CK_LValueToRValue:
       return CXXCast::CC_ConstCast;
 
-      /// dynamic cast type
+    /// dynamic cast type
     case CastKind::CK_Dynamic:
       return CXXCast::CC_DynamicCast;
 
-    // TODO: Investigate whether this will ever happen in C-style cast.
-    case CastKind::CK_UncheckedDerivedToBase:
-    /// Invalid cast types for C-style casts
-      // TODO: It seems like the gcc extension doesn't work on neither
-      // clang nor gcc: https://godbolt.org/z/NtDrA7.
-      // link to the extension: https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html
-    case CastKind::CK_ToUnion: {
-      llvm::outs() << "Union casts aren't working.";
-      return CXXCast::CC_InvalidCast;
-    }
-      // Objective C pointer types &
-      // Objective C automatic reference counting (ARC) &
-      // Objective C blocks (AFAIK C++ blocks were never implemented and it's
-      //    a C++ extension and thus we don't support it)
+    // Dependent types are left as they are.
+    // TODO: Provide warning for dependent types encountered.
+    case CastKind::CK_Dependent:
+    // Built-in functions must be directly called and don't have
+    // address. This is impossible for C-style casts.
+    case CastKind::CK_BuiltinFnToFnPtr:
+    // Union casts is not available in C++.
+      return CXXCast::CC_CStyleCast;
+
+    case CastKind::CK_ToUnion:
+    // C++ does not officially support the Objective C extensions.
+    // We mark these as invalid.
+    // Objective C pointer types &
+    // Objective C automatic reference counting (ARC) &
+    // Objective C blocks
     case CastKind::CK_CPointerToObjCPointerCast:
     case CastKind::CK_BlockPointerToObjCPointerCast:
     case CastKind::CK_AnyPointerToBlockPointerCast:
@@ -267,30 +311,12 @@ CXXCast getCastType(const CastExpr* CastExpression,
     case CastKind::CK_ARCConsumeObject:
     case CastKind::CK_ARCReclaimReturnedObject:
     case CastKind::CK_ARCExtendBlockObject:
-    case CastKind::CK_CopyAndAutoreleaseBlockObject: {
-      llvm::outs() << "These are Objective-C casts and should not be encountered in C++.";
+    case CastKind::CK_CopyAndAutoreleaseBlockObject:
+    default:
       return CXXCast::CC_InvalidCast;
-    }
-    // Built-in functions must be directly called and don't have
-    // address. This is impossible for C-style casts.
-    case CastKind::CK_BuiltinFnToFnPtr: {
-      llvm::outs() << "Built-in functions cannot be c-style casted.";
-      return CXXCast::CC_InvalidCast;
-    }
-      // TODO
-    case CastKind::CK_Dependent: {
-      llvm::outs() << "Dependent types are not yet implemented.";
-      return CXXCast::CC_InvalidCast;
-    }
-    default: {
-      llvm::outs() << "These are some messed up casts.";
-      return CXXCast::CC_InvalidCast;
-    }
   }
 }
 
 } // namespace cast
 } // namespace clang
-
-
 #endif

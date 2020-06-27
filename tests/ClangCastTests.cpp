@@ -31,14 +31,15 @@ struct CStyleCastCollector : MatchFinder::MatchCallback {
 
   virtual void run(const MatchFinder::MatchResult &Result) override {
     const CStyleCastExpr* Expr = Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
-    // TODO test
-    Expr->dump();
     if(!Expr) {
       llvm::errs() << "This should never happen.\n";
       return;
     }
-    // traverse the expr tree and get cast kinds
+    // TODO: remove after done testing
+    Expr->dump();
     const CastExpr* GenericCastExpr = dyn_cast<CastExpr>(Expr);
+    // traverse the expr tree and set current expr
+    // node to GenericCastExpr.
     while(GenericCastExpr) {
       CastKinds.insert(GenericCastExpr->getCastKind());
       GenericCastExpr = dyn_cast<CastExpr>(GenericCastExpr->getSubExpr());
@@ -69,36 +70,10 @@ protected:
 TEST_F(ClangCastTest, TestConstCastTypes) {
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(NoOp, ConstCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(ArrayToPointerDecay, ConstCast);
-//  CLANG_CAST_CHECK_SINGLE_TEST_CASE(LValueToRValue, ConstCast);
+  // Unchecked: CLANG_CAST_CHECK_SINGLE_TEST_CASE(LValueToRValue, ConstCast);
 }
 
 TEST_F(ClangCastTest, TestReinterpretCastTypes) {
-//  const auto s = "#include <stdint.h>\nvoid f(){\n(bool) 3.2f;\n(int) true;\nint x = 2;\nconst int y = (const int) x;\n(intptr_t) nullptr;}";
-//  auto v = parse(s);
-//  for(auto e : v) {
-//    switch (e) {
-//      case CXXCast::CC_ConstCast: {
-//        llvm::outs() << "const\n";
-//        break;
-//      }
-//      case CXXCast::CC_StaticCast: {
-//        llvm::outs() << "static\n";
-//        break;
-//      }
-//      case CXXCast::CC_ReinterpretCast: {
-//        llvm::outs() << "reinterpret\n";
-//        break;
-//      }
-//      case CXXCast::CC_DynamicCast: {
-//        llvm::outs() << "dynamic\n";
-//        break;
-//      }
-//      case CXXCast::CC_InvalidCast: {
-//        llvm::outs() << "invalid\n";
-//        break;
-//      }
-//    }
-//  }
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(BitCast, ReinterpretCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(LValueBitCast, ReinterpretCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(ReinterpretMemberPointer, ReinterpretCast);
@@ -107,9 +82,8 @@ TEST_F(ClangCastTest, TestReinterpretCastTypes) {
 
 TEST_F(ClangCastTest, TestStaticCastTypes) {
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(BaseToDerived, StaticCast);
-  // Special case: C-style cannot be converted
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(DerivedToBase, StaticCast);
-//  CLANG_CAST_CHECK_SINGLE_TEST_CASE(UncheckedDerivedToBase, StaticCast);
+  // Unchecked: CLANG_CAST_CHECK_SINGLE_TEST_CASE(UncheckedDerivedToBase, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(FunctionToPointerDecay, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(NullToPointer, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(NullToMemberPointer, StaticCast);
@@ -127,6 +101,7 @@ TEST_F(ClangCastTest, TestStaticCastTypes) {
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(IntegralToFloating, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(FloatingToIntegral, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(FloatingToBoolean, StaticCast);
+  // TODO: How is this possible? CLANG_CAST_CHECK_SINGLE_TEST_CASE(BooleanToSignedIntegral, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(FloatingCast, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(FloatingRealToComplex, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(FloatingComplexToReal, StaticCast);
@@ -138,7 +113,8 @@ TEST_F(ClangCastTest, TestStaticCastTypes) {
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(IntegralComplexToBoolean, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(IntegralComplexCast, StaticCast);
   CLANG_CAST_CHECK_SINGLE_TEST_CASE(IntegralComplexToFloatingComplex, StaticCast);
-
+  CLANG_CAST_CHECK_SINGLE_TEST_CASE(AtomicToNonAtomic, StaticCast);
+  CLANG_CAST_CHECK_SINGLE_TEST_CASE(NonAtomicToAtomic, StaticCast);
 }
 
 TEST_F(ClangCastTest, TestEdgeCases) {
@@ -148,13 +124,13 @@ TEST_F(ClangCastTest, TestEdgeCases) {
     ASSERT_GE(res.first.size(), 1);
     ASSERT_GE(res.second.size(), 1);
     ASSERT_TRUE(res.first.find(CastKind::CK_DerivedToBase) != res.first.end());
-    ASSERT_EQ(res.second[0], CXXCast::CC_InvalidCast);
+    ASSERT_EQ(res.second[0], CXXCast::CC_CStyleCast);
   }
   {
     auto res = parse(BaseToDerivedPrivateSpecifier);
     ASSERT_GE(res.first.size(), 1);
     ASSERT_GE(res.second.size(), 1);
     ASSERT_TRUE(res.first.find(CastKind::CK_BaseToDerived) != res.first.end());
-    ASSERT_EQ(res.second[0], CXXCast::CC_InvalidCast);
+    ASSERT_EQ(res.second[0], CXXCast::CC_CStyleCast);
   }
 }

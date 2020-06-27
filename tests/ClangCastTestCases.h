@@ -43,30 +43,32 @@ void f() {
 static const char BaseToDerived[] = R"(
 class A {};
 class B: public A {};
+class C: public B {};
 
 void f() {
   A* a = nullptr;
-  (B*) a;
+  (C*) a;
 }
 )";
 static const char DerivedToBase[] = R"(
 class A {};
 class B: public A {};
+class C: public B {};
 
 void f() {
-  B* b = nullptr;
-  (A*) b;
+  C* c = nullptr;
+  (A*) c;
 }
 )";
 // NOTE: Unused, as C style casts cannot
 //       perform this. It must be done implicitly.
 static const char UncheckedDerivedToBase[] = R"(
-class A { void g(); };
+class A { public: void a(){} };
 class B : public A {};
 
 void f() {
-    B* b = nullptr;
-    b->g();
+    B *b;
+    b->a();
 }
 )";
 static const char FunctionToPointerDecay[] = R"(
@@ -251,6 +253,18 @@ static const char IntegralComplexToFloatingComplex[] = R"(
 void f() {
   _Complex long long c;
   (_Complex float) c;
+}
+)";
+static const char AtomicToNonAtomic[] = R"(
+void f() {
+  _Atomic(int) c;
+  (int) c;
+}
+)";
+static const char NonAtomicToAtomic[] = R"(
+void f() {
+  int c;
+  (_Atomic(int)) c;
 }
 )";
 
