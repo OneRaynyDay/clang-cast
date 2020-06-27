@@ -42,6 +42,10 @@ namespace cppcast {
 /// performed at RUNTIME. This is not possible to be expressed
 /// in terms of C-style casts.
 ///
+/// CC_NoOpCast
+/// -----------
+/// This is a cast from a type to itself. The cast can be omitted.
+///
 /// CC_ConstCast
 /// ------------
 /// int x = 1;
@@ -76,6 +80,7 @@ namespace cppcast {
 /// Please refer to getCastType and castHelper for more information.
 enum CXXCast : std::uint8_t {
   CC_DynamicCast,
+  CC_NoOpCast,
   CC_ConstCast,
   CC_StaticCast,
   CC_ReinterpretCast,
@@ -108,7 +113,7 @@ bool isAccessible(const CXXRecordDecl* Base,
   for (const CXXBaseSpecifier &Specifier : Derived->bases()) {
     // This should already be canonical
     const QualType& BaseType = Specifier.getType();
-    CXXRecordDecl* BaseClass = BaseType.getTypePtrOrNull()->getAsCXXRecordDecl();
+    CXXRecordDecl* BaseClass = (*BaseType).getAsCXXRecordDecl();
 
     if(Specifier.getAccessSpecifier() == clang::AccessSpecifier::AS_public &&
             isAccessible(Base, BaseClass))
@@ -163,6 +168,65 @@ CXXCast castHelper(const Expr* Expression,
                     CanonicalCastType);
 }
 
+/// Given a QualType, we want to find the qualifications associated
+/// with the value itself. This is important because for example:
+///
+/// const volatile int& __restrict x;
+///
+/// has __restrict qualifier on the reference, but has
+/// const and volatile qualifiers on the value. If we view this in a
+/// nested example:
+///
+/// const int** ptr;
+/// (int**) ptr;
+///
+/// If we were to strip away one layer of pointers, we wouldn't be able to
+/// find the const qualifier on the value itself. We need to find the
+/// value's qualifiers for const_cast'ing const and volatile keywords.
+///
+/// \return
+QualType stripRefAndPtrs(const QualType& QualifiedType) {
+  if(QualifiedType->isReferenceType())
+    return QualifiedType.getNonReferenceType();
+  else if(QualifiedType->isPointerType()) {
+    const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
+    return PtrType->getPointeeType();
+  }
+  return QualifiedType;
+}
+
+/// Given a cast expression, determine whether the cast affects
+/// modifiers. (This information cannot be found through CastKinds)
+///
+/// \return true if the qualifier is modified from the cast expression,
+///         false otherwise.
+bool isQualifierModified(const QualType& CanonicalSubExprType,
+                         const QualType& CanonicalCastType) {
+  bool CurrentEquals = ((CanonicalSubExprType.isConstQualified() == CanonicalCastType.isConstQualified()) &&
+                        (CanonicalSubExprType.isVolatileQualified() == CanonicalCastType.isVolatileQualified()) &&
+                        (CanonicalSubExprType.isRestrictQualified() == CanonicalCastType.isRestrictQualified()));
+  if (!CurrentEquals) {
+    return true;
+  }
+
+  QualType StrippedSubExprType = stripRefAndPtrs(CanonicalSubExprType);
+  QualType StrippedCastType = stripRefAndPtrs(CanonicalCastType);
+
+  if (StrippedSubExprType == CanonicalSubExprType ||
+      StrippedCastType == CanonicalCastType)
+    return false;
+
+  return isQualifierModified(StrippedSubExprType, StrippedCastType);
+//
+//  if (isQualifierModified)
+//  llvm::outs() << SubExprQual.getAsString() << " & " << CastTypeQual.getAsString() << "\n";
+//  llvm::outs() << "canonical subexpr: " << CanonicalSubExprType.isConstQualified() << " " << CanonicalSubExprType.isVolatileQualified() << " " << CanonicalSubExprType.isRestrictQualified() << " " << CanonicalSubExprType.getCVRQualifiers() << "\n";
+//  llvm::outs() << "canonical cast: " << CanonicalCastType.isConstQualified() << " " << CanonicalCastType.isVolatileQualified() << " " << CanonicalCastType.isRestrictQualified() << " " << CanonicalCastType.getCVRQualifiers() << "\n";
+//  llvm::outs() << SubExprQual.hasConst() << " " << SubExprQual.hasVolatile() << " " << SubExprQual.hasRestrict() << "\n";
+//  llvm::outs() << CastTypeQual.hasConst() << " " << CastTypeQual.hasVolatile() << " " << CastTypeQual.hasRestrict() << "\n";
+//  return !;
+}
+
 } // namespace details
 
 /// Main function for determining CXX cast type.
@@ -179,13 +243,28 @@ CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
   QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
 
   return details::castHelper(CastExpression,
-                             CXXCast::CC_ConstCast,
+                             // Start with NoOpCast(so we'll never hit dynamic)
+                             CXXCast::CC_NoOpCast,
                              CanonicalSubExpressionType,
                              CanonicalCastType);
 }
 
+bool requireConstCast(const QualType& CanonicalSubExprType,
+                      const QualType& CanonicalCastType) {
+  // First of all, the subexpr type and cast type must be both pointer or
+  // both reference types.
+  const Type& ExprType = *CanonicalSubExprType;
+  const Type& CastType = *CanonicalCastType;
+  if (ExprType.isPointerType() && CastType.isPointerType() ||
+      ExprType.isReferenceType() && CastType.isReferenceType())
+    return details::isQualifierModified(CanonicalSubExprType, CanonicalCastType);
+  return false;
+}
+
 /// Given a CastExpr, determine from its CastKind and other metadata
-/// the corresponding CXXCast to use.
+/// the corresponding CXXCast to use (NOTE: this does not include
+///     the additional const cast for qualifiers if it is
+///     static/interpret. Use isQualifierModified for that.)
 /// Note that it's a CastExpr, which can be either CStyleCastExpr
 /// or ImplicitCastExpr or any of its children.
 ///
@@ -195,13 +274,16 @@ CXXCast getCastType(const CastExpr* CastExpression,
                     const QualType& CanonicalCastType) {
   const CastKind CastType = CastExpression->getCastKind();
   switch(CastType) {
-    /// Reinterpret cast types
-    case CastKind::CK_BitCast:
-    case CastKind::CK_LValueBitCast:
-    case CastKind::CK_LValueToRValueBitCast:
-    case CastKind::CK_ReinterpretMemberPointer:
-    case CastKind::CK_PointerToIntegral:
-      return CXXCast::CC_ReinterpretCast;
+
+    /// No-op cast type
+    case CastKind::CK_NoOp:
+    case CastKind::CK_ArrayToPointerDecay:
+    case CastKind::CK_LValueToRValue:
+      return CXXCast::CC_NoOpCast;
+
+    /// dynamic cast type
+    case CastKind::CK_Dynamic:
+      return CXXCast::CC_DynamicCast;
 
     /// Static cast types
     // This cannot be expressed in the form of a C-style cast.
@@ -221,13 +303,13 @@ CXXCast getCastType(const CastExpr* CastExpression,
       // A *f(B *b) { return (A*)(b); }
       //
       // We assume that the base class is unambiguous.
-      const CXXRecordDecl* Base = CanonicalCastType.getTypePtr()->getPointeeCXXRecordDecl();
-      const CXXRecordDecl* Derived = CanonicalSubExprType.getTypePtr()->getPointeeCXXRecordDecl();
+      const CXXRecordDecl* Base = (*CanonicalCastType).getPointeeCXXRecordDecl();
+      const CXXRecordDecl* Derived = (*CanonicalSubExprType).getPointeeCXXRecordDecl();
       return details::getBaseDerivedCast(Base, Derived);
     }
     case CastKind::CK_BaseToDerived: {
-      const CXXRecordDecl* Base = CanonicalSubExprType.getTypePtr()->getPointeeCXXRecordDecl();
-      const CXXRecordDecl* Derived = CanonicalCastType.getTypePtr()->getPointeeCXXRecordDecl();
+      const CXXRecordDecl* Base = (*CanonicalSubExprType).getPointeeCXXRecordDecl();
+      const CXXRecordDecl* Derived = (*CanonicalCastType).getPointeeCXXRecordDecl();
       return details::getBaseDerivedCast(Base, Derived);
     }
     case CastKind::CK_FunctionToPointerDecay:
@@ -278,26 +360,25 @@ CXXCast getCastType(const CastExpr* CastExpression,
     case CastKind::CK_IntToOCLSampler:
       return CXXCast::CC_StaticCast;
 
-    /// const cast type
-    case CastKind::CK_NoOp:
-    case CastKind::CK_ArrayToPointerDecay:
-    case CastKind::CK_LValueToRValue:
-      return CXXCast::CC_ConstCast;
+    /// Reinterpret cast types
+    case CastKind::CK_BitCast:
+    case CastKind::CK_LValueBitCast:
+    case CastKind::CK_LValueToRValueBitCast:
+    case CastKind::CK_ReinterpretMemberPointer:
+    case CastKind::CK_PointerToIntegral:
+      return CXXCast::CC_ReinterpretCast;
 
-    /// dynamic cast type
-    case CastKind::CK_Dynamic:
-      return CXXCast::CC_DynamicCast;
-
+    /// C-style cast types
     // Dependent types are left as they are.
     // TODO: Provide warning for dependent types encountered.
     case CastKind::CK_Dependent:
+      return CXXCast::CC_CStyleCast;
+
+    // Union casts is not available in C++.
+    case CastKind::CK_ToUnion:
     // Built-in functions must be directly called and don't have
     // address. This is impossible for C-style casts.
     case CastKind::CK_BuiltinFnToFnPtr:
-    // Union casts is not available in C++.
-      return CXXCast::CC_CStyleCast;
-
-    case CastKind::CK_ToUnion:
     // C++ does not officially support the Objective C extensions.
     // We mark these as invalid.
     // Objective C pointer types &

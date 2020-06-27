@@ -1,41 +1,28 @@
-#ifndef LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCASTTESTCASES_H
-#define LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCASTTESTCASES_H
+#ifndef LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCXXCASTTESTCASES_H
+#define LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCXXCASTTESTCASES_H
 
 namespace testcases {
 
-/// Reinterpret cast types
-const char BitCast[] = R"(
+/// Const cast types
+static const char NoOp[] = R"(
 void f() {
-  char* x;
-  (int *) x;
+  (int&&) 0;
 }
 )";
-const char LValueBitCast[] = R"(
+static const char ArrayToPointerDecay[] = R"(
 void f() {
-  char c;
-  (bool&) c;
+  char x[] = "";
+  (char*) x;
 }
 )";
 // NOTE: Unused, as C style casts cannot
-//       perform this. It must be done by bit_cast.
-const char LValueToRValueBitCast[] = R"(
+//       perform this. It must be done implicitly.
+//       (int&&) x is a NoOp, and std::move(x) is
+//       FunctionToPointerDecay.
+static const char LValueToRValue[] = R"(
 void f() {
-  int i;
-  std::bit_cast<float>(i);
-}
-)";
-static const char ReinterpretMemberPointer[] = R"(
-struct A { int val; };
-
-void f() {
-  int A::* ptr = &A::val;
-  (bool A::*) ptr;
-}
-)";
-static const char PointerToIntegral[] = R"(
-#include <stdint.h>
-void f() {
-  (intptr_t) nullptr;
+  int x;
+  int y = x;
 }
 )";
 
@@ -268,26 +255,47 @@ void f() {
 }
 )";
 
-/// Const cast types
-static const char NoOp[] = R"(
+/// Reinterpret cast types
+const char BitCast[] = R"(
 void f() {
-  (int&&) 0;
+  char* x;
+  (int *) x;
 }
 )";
-static const char ArrayToPointerDecay[] = R"(
+const char LValueBitCast[] = R"(
 void f() {
-  char x[] = "";
-  (char*) x;
+  char c;
+  (bool&) c;
 }
 )";
 // NOTE: Unused, as C style casts cannot
-//       perform this. It must be done implicitly.
-//       (int&&) x is a NoOp, and std::move(x) is
-//       FunctionToPointerDecay.
-static const char LValueToRValue[] = R"(
+//       perform this. It must be done by bit_cast.
+const char LValueToRValueBitCast[] = R"(
 void f() {
-  int x;
-  int y = x;
+  int i;
+  std::bit_cast<float>(i);
+}
+)";
+static const char ReinterpretMemberPointer[] = R"(
+struct A { int val; };
+
+void f() {
+  int A::* ptr = &A::val;
+  (bool A::*) ptr;
+}
+)";
+static const char PointerToIntegral[] = R"(
+#include <stdint.h>
+void f() {
+  (intptr_t) nullptr;
+}
+)";
+
+/// C-style cast types
+static const char Dependent[] = R"(
+template <typename T>
+void foo() {
+    (T) 0;
 }
 )";
 
@@ -313,4 +321,4 @@ A* foo(B *b) { return (A*)(b); }
 
 } // namespace testcases
 
-#endif // LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCASTTESTCASES_H
+#endif // LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCXXCASTTESTCASES_H
