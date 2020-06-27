@@ -184,11 +184,13 @@ CXXCast castHelper(const Expr* Expression,
 /// find the const qualifier on the value itself. We need to find the
 /// value's qualifiers for const_cast'ing const and volatile keywords.
 ///
-/// \return
+/// \return TODO
 QualType stripRefAndPtrs(const QualType& QualifiedType) {
+  // TODO: Check the standards for details on this and why we're not getting
+  // the correct results for references
   if(QualifiedType->isReferenceType())
     return QualifiedType.getNonReferenceType();
-  else if(QualifiedType->isPointerType()) {
+  if(QualifiedType->isPointerType()) {
     const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
     return PtrType->getPointeeType();
   }

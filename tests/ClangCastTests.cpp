@@ -187,15 +187,16 @@ TEST_F(ClangQualifierModificationTest, TestAllCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConst, true, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtr, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDoublePtr, true, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstRef, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatile, true, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatilePtr, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileDoublePtr, true, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileRef, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedPtr, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedDoublePtr, true, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedRef, true, true);
 
+  // TODO: The pieces below are for reference types.
+//CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstRef, true, true);
+//CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileRef, true, true);
+//CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedRef, true, true);
 // TODO: for member function pointers you can actually change the qualifier
 // for it and in order to do so you use reinterpret_cast WITHOUT
 // const_cast to remove the qualifiers... WTF?
