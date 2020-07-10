@@ -183,20 +183,27 @@ TEST_F(ClangCXXCastTest, TestEdgeCases) {
 }
 
 TEST_F(ClangQualifierModificationTest, TestAllCases) {
+  // These tests mean:
+  // Is <test case> modifying any qualifiers?
+  // Does the C-style cast in <test case> require a const_cast?
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualNoOp, false, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConst, true, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtr, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDoublePtr, true, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstRef, true, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstArr, true, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstArrPtr, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatile, true, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatilePtr, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileDoublePtr, true, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileRef, true, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileArr, true, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileArrPtr, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedPtr, true, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedDoublePtr, true, true);
-
-  // TODO: The pieces below are for reference types.
-//CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstRef, true, true);
-//CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileRef, true, true);
-//CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedRef, true, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedRef, true, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedArr, true, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictedArrPtr, true, true);
 // TODO: for member function pointers you can actually change the qualifier
 // for it and in order to do so you use reinterpret_cast WITHOUT
 // const_cast to remove the qualifiers... WTF?

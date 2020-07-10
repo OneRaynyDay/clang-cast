@@ -168,35 +168,6 @@ CXXCast castHelper(const Expr* Expression,
                     CanonicalCastType);
 }
 
-/// Given a QualType, we want to find the qualifications associated
-/// with the value itself. This is important because for example:
-///
-/// const volatile int& __restrict x;
-///
-/// has __restrict qualifier on the reference, but has
-/// const and volatile qualifiers on the value. If we view this in a
-/// nested example:
-///
-/// const int** ptr;
-/// (int**) ptr;
-///
-/// If we were to strip away one layer of pointers, we wouldn't be able to
-/// find the const qualifier on the value itself. We need to find the
-/// value's qualifiers for const_cast'ing const and volatile keywords.
-///
-/// \return TODO
-QualType stripRefAndPtrs(const QualType& QualifiedType) {
-  // TODO: Check the standards for details on this and why we're not getting
-  // the correct results for references
-  if(QualifiedType->isReferenceType())
-    return QualifiedType.getNonReferenceType();
-  if(QualifiedType->isPointerType()) {
-    const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
-    return PtrType->getPointeeType();
-  }
-  return QualifiedType;
-}
-
 /// Given a cast expression, determine whether the cast affects
 /// modifiers. (This information cannot be found through CastKinds)
 ///
@@ -207,26 +178,59 @@ bool isQualifierModified(const QualType& CanonicalSubExprType,
   bool CurrentEquals = ((CanonicalSubExprType.isConstQualified() == CanonicalCastType.isConstQualified()) &&
                         (CanonicalSubExprType.isVolatileQualified() == CanonicalCastType.isVolatileQualified()) &&
                         (CanonicalSubExprType.isRestrictQualified() == CanonicalCastType.isRestrictQualified()));
+
   if (!CurrentEquals) {
     return true;
   }
 
-  QualType StrippedSubExprType = stripRefAndPtrs(CanonicalSubExprType);
-  QualType StrippedCastType = stripRefAndPtrs(CanonicalCastType);
+  auto StripPtrLayer = [](const QualType& QualifiedType) -> QualType {
+    const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
+    return PtrType->getPointeeType();
+  };
 
-  if (StrippedSubExprType == CanonicalSubExprType ||
-      StrippedCastType == CanonicalCastType)
-    return false;
+  auto StripRefLayer = [](const QualType& QualifiedType) -> QualType {
+    return QualifiedType.getNonReferenceType();
+  };
 
-  return isQualifierModified(StrippedSubExprType, StrippedCastType);
-//
-//  if (isQualifierModified)
-//  llvm::outs() << SubExprQual.getAsString() << " & " << CastTypeQual.getAsString() << "\n";
-//  llvm::outs() << "canonical subexpr: " << CanonicalSubExprType.isConstQualified() << " " << CanonicalSubExprType.isVolatileQualified() << " " << CanonicalSubExprType.isRestrictQualified() << " " << CanonicalSubExprType.getCVRQualifiers() << "\n";
-//  llvm::outs() << "canonical cast: " << CanonicalCastType.isConstQualified() << " " << CanonicalCastType.isVolatileQualified() << " " << CanonicalCastType.isRestrictQualified() << " " << CanonicalCastType.getCVRQualifiers() << "\n";
-//  llvm::outs() << SubExprQual.hasConst() << " " << SubExprQual.hasVolatile() << " " << SubExprQual.hasRestrict() << "\n";
-//  llvm::outs() << CastTypeQual.hasConst() << " " << CastTypeQual.hasVolatile() << " " << CastTypeQual.hasRestrict() << "\n";
-//  return !;
+  auto StripArrayLayer = [](const QualType& QualifiedType) -> QualType {
+    const ArrayType *ArrType = dyn_cast<ArrayType>(QualifiedType);
+    return ArrType->getElementType();
+  };
+
+  // Case 1 - multilevel pointers/arrays
+  // According to the standards:
+  // "Two possibly multilevel pointers to the same type may be
+  // converted between each other, regardless of cv-qualifiers at each level."
+  //
+  // One can only cast arrays to pointer types and not vice versa, i.e.:
+  // int arr[] {1,2};
+  // (const int*) arr;
+  //
+  // We must also take care of the case of nested pointers to array.
+  // (const int(*)[2]) &arr;
+  if (CanonicalCastType->isPointerType()) {
+    QualType StrippedCastType = StripPtrLayer(CanonicalCastType);
+    if (CanonicalSubExprType->isPointerType()) {
+      QualType StrippedSubExprType = StripPtrLayer(CanonicalSubExprType);
+      return isQualifierModified(StrippedSubExprType, StrippedCastType);
+    }
+    if (CanonicalSubExprType->isArrayType()) {
+      QualType StrippedSubExprType = StripArrayLayer(CanonicalSubExprType);
+      return isQualifierModified(StrippedSubExprType, StrippedCastType);
+    }
+  }
+
+  // Case 2 (fallthrough) - lvalue reference cast to r/lvalue reference
+  // It's the case that the SubExpr, even if it is a reference, it's not
+  // reflected in value categories in the AST. So we only remove ref
+  // on the cast type.
+  // Refer to requireConstCast comments for more information.
+  if(CanonicalCastType->isReferenceType()) {
+    return isQualifierModified(CanonicalSubExprType,
+                               StripRefLayer(CanonicalCastType));
+  }
+  // Case 1 - Root case: There are no more layers of pointers.
+  return false;
 }
 
 } // namespace details
@@ -253,12 +257,25 @@ CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
 
 bool requireConstCast(const QualType& CanonicalSubExprType,
                       const QualType& CanonicalCastType) {
-  // First of all, the subexpr type and cast type must be both pointer or
-  // both reference types.
-  const Type& ExprType = *CanonicalSubExprType;
-  const Type& CastType = *CanonicalCastType;
-  if (ExprType.isPointerType() && CastType.isPointerType() ||
-      ExprType.isReferenceType() && CastType.isReferenceType())
+  // (1) If CastType is a reference type, SubExprType may not be, even if it is
+  // defined as an lvalue reference.
+  // For example:
+  //
+  // int& y = x;
+  // const int& z = (const int&) y;
+  //
+  // Is represented as:
+  // SubExpr(y): BuiltinType 'int'
+  // CastType(const int&): LValueReferenceType 'const int &'
+  //                       `-QualType 'const int' const
+  //                         `-BuiltinType 'int'
+  // (2) We don't explicitly check for the type because even if we are
+  // performing a reinterpret cast from int to float&, or bool* to long*,
+  // that will be checked from getCastKindFromCStyleCast,
+  // but if any qualifiers are changed, a const cast is needed after anyways.
+  if (((CanonicalSubExprType->isPointerType() || CanonicalSubExprType->isArrayType())
+      && CanonicalCastType->isPointerType()) ||
+      CanonicalCastType->isReferenceType())
     return details::isQualifierModified(CanonicalSubExprType, CanonicalCastType);
   return false;
 }
