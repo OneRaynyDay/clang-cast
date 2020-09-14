@@ -163,6 +163,10 @@ TEST_F(ClangCXXCastTest, TestStaticCastTypes) {
   CLANG_CXX_CAST_CHECK_SINGLE_TEST_CASE(NonAtomicToAtomic, StaticCast);
 }
 
+TEST_F(ClangCXXCastTest, TestCStyleCastTypes) {
+  // TODO
+}
+
 TEST_F(ClangCXXCastTest, TestEdgeCases) {
   using namespace edgecases;
   {
