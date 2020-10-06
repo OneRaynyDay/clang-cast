@@ -197,6 +197,10 @@ bool isQualifierModified(const QualType& CanonicalSubExprType,
     return ArrType->getElementType();
   };
 
+  // TODO: Do we ever need to take care of casting to pointer-of-array?
+  // We can't ever cast to array, but this might be possible:
+  // https://stackoverflow.com/questions/20046429/casting-pointer-to-array-int-to-int2
+
   // Case 1 - multilevel pointers/arrays
   // According to the standards:
   // "Two possibly multilevel pointers to the same type may be
@@ -255,6 +259,48 @@ CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
                              CanonicalCastType);
 }
 
+/// TODO: Test this with pointers, arrays, and references.
+/// Given a QualType From with a set of qualifiers, return a copy of From
+/// with the same underlying type but with the qualifiers modified to be To.
+/// We require From and To to be canonical, otherwise it is undefined behavior.
+///     (To be precise, we don't get rid of qualifiers from typedefs)
+///
+/// \param From, a copy of QualType cast expression
+/// \param To, a copy of QualType subexpression
+/// \return Res, a copy of From with To's (possibly nested) qualifiers
+QualType changeQualifiers(QualType From, const QualType To, const ASTContext* Context) {
+  // TODO: Remove this code duplication BS
+  auto StripPtrLayer = [](const QualType& QualifiedType) -> QualType {
+    const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
+    return PtrType->getPointeeType();
+  };
+  auto StripRefLayer = [](const QualType& QualifiedType) -> QualType {
+    return QualifiedType.getNonReferenceType();
+  };
+  auto StripArrayLayer = [](const QualType& QualifiedType) -> QualType {
+    const ArrayType *ArrType = dyn_cast<ArrayType>(QualifiedType);
+    return ArrType->getElementType();
+  };
+
+  if (From->isPointerType()) {
+    QualType StrippedFrom = StripPtrLayer(From);
+    if (To->isPointerType()) {
+      QualType StrippedTo = StripPtrLayer(To);
+      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
+    }
+    if (To->isArrayType()) {
+      QualType StrippedTo = StripArrayLayer(To);
+      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
+    }
+  }
+  // We don't need to check if it's a reference type.
+
+  QualType Res = From.getUnqualifiedType();
+  Res.setLocalFastQualifiers(To.getLocalFastQualifiers());
+  return Res;
+}
+
+// TODO: Add tests for templates - how do we tell if templates are pointer types/ref types?
 bool requireConstCast(const QualType& CanonicalSubExprType,
                       const QualType& CanonicalCastType) {
   // (1) If CastType is a reference type, SubExprType may not be, even if it is

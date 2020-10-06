@@ -1,13 +1,25 @@
+#include "assert.h"
 #include "ClangCast.h"
-#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
+#include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/DiagnosticOptions.h"
+#include "clang/Basic/FileManager.h"
+#include "clang/Basic/LangOptions.h"
+#include "clang/Basic/SourceManager.h"
+#include "clang/Frontend/TextDiagnosticPrinter.h"
+#include "clang/Rewrite/Core/Rewriter.h"
+#include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "clang/Tooling/Refactoring.h"
+#include "clang/Tooling/Tooling.h"
+#include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/Support/Error.h"
 
 using namespace clang::ast_matchers;
 using namespace clang;
 using namespace cppcast;
+using namespace llvm;
 
 static llvm::cl::OptionCategory ClangCastCategory("clang-cast options");
 
@@ -33,37 +45,100 @@ public:
     QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
     QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
     const bool RequireConstCast = requireConstCast(CanonicalSubExpressionType, CanonicalCastType);
-    const CharSourceRange CastRange = CharSourceRange::getTokenRange(CastExpression->getLParenLoc(), CastExpression->getRParenLoc());
+    const CharSourceRange CastRange = CharSourceRange::getTokenRange(
+        CastExpression->getLParenLoc(),
+        CastExpression->getRParenLoc());
+
+    // Add diagnostics about the cast type
+    auto reportDiagnostic = [&](const std::vector<CXXCast>& casts){
+      DiagnosticsEngine &DiagEngine = Context->getDiagnostics();
+      // Set diagnostics to warning by default, and to INFO for edge cases.
+      DiagnosticIDs::Level DiagLevel = DiagnosticIDs::Warning;
+      std::string DiagMessage = "The C-style cast can be substituted for ";
+      assert (!casts.empty());
+      // There are 8 different situations in which we want to provide
+      // different messages for.
+      // 1. No-op cast (remove the cast)
+      // 2. Only const cast
+      // 3. Static cast
+      // 4. Static cast + const cast
+      // 5. Reinterpret cast
+      // 6. Reinterpret cast + const cast
+      // 7. C style cast (keep the cast as is)
+      // 8. Invalid cast (this should never happen, and would be a bug)
+      bool ConstCastRequired = casts.size() > 1 && casts[1] == CXXCast::CC_ConstCast;
+      if (casts[0] == CXXCast::CC_NoOpCast) {
+        // Case 1
+        if (!ConstCastRequired) {
+          DiagMessage = "No cast is necessary (no-op)";
+          DiagLevel = DiagnosticIDs::Remark;
+        }
+        // Case 2
+        else {
+          DiagMessage += "'const_cast<" + CanonicalCastType.getAsString() + ">'";
+        }
+      }
+      else if (casts[0] == CXXCast::CC_StaticCast) {
+        // Case 3
+        if (!ConstCastRequired) {
+          DiagMessage += "'static_cast<" + CanonicalCastType.getAsString() + ">'";
+        }
+        // Case 4
+        else {
+          DiagMessage += ("'const_cast<" + CanonicalCastType.getAsString() + ">("
+                          + "'static_cast<" + changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getAsString() + ">())'");
+        }
+      }
+      else if (casts[0] == CXXCast::CC_ReinterpretCast) {
+        // Case 5
+        if (!ConstCastRequired) {
+          DiagMessage += "'reinterpret_cast<" + CanonicalCastType.getAsString() + ">()'";
+        }
+        // Case 6
+        else {
+          DiagMessage += ("'const_cast<" + CanonicalCastType.getAsString() + ">("
+                          + "'reinterpret_cast<" + changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getAsString() + ">())'");
+        }
+      }
+      // Case 7
+      else if (casts[0] == CXXCast::CC_CStyleCast) {
+        DiagMessage = "Cannot infer C++ style cast. Keeping C-style cast";
+        DiagLevel = DiagnosticIDs::Remark;
+      }
+      // Case 8
+      else if (casts[0] == CXXCast::CC_InvalidCast) {
+        DiagMessage = "clang-casts has encountered an error. Currently does not support the following cast";
+        DiagLevel = DiagnosticIDs::Error;
+      }
+
+      unsigned ID = DiagEngine.getDiagnosticIDs()->getCustomDiagID(
+          DiagLevel, DiagMessage);
+      // Reports the error at the location of the cast
+      DiagEngine.Report(CastExpression->getExprLoc(), ID);
+    };
 
     auto replaceWithCast = [&](const std::vector<CXXCast>& casts) {
       tooling::Replacement Rep(
           Context->getSourceManager(),
           CastRange,
+          // TODO
           StringRef("(lmao)"),
           Context->getLangOpts());
 
-      llvm::Error ErrorCheck = Replacements[std::string(Rep.getFilePath())].add(Rep);
+      Error ErrorCheck = Replacements[std::string(Rep.getFilePath())].add(Rep);
       // TODO: Don't just consume it without checking.
       // move is required because copy constructor is deleted.
-      llvm::consumeError(std::move(ErrorCheck));
+      consumeError(std::move(ErrorCheck));
     };
 
     std::vector<CXXCast> CastOrder;
 
-    // If in the rare occasion, we really do require a full C-style power
-    // cast, we will simply skip over this match.
-    if(CXXCastType == CXXCast::CC_CStyleCast) {
-      llvm::outs() << "Skipping over a truly C-style cast.\n";
-      return;
-    }
-
-    if (CXXCastType != CXXCast::CC_NoOpCast) {
-      CastOrder.push_back(CXXCastType);
-    }
+    CastOrder.push_back(CXXCastType);
     if (RequireConstCast) {
       CastOrder.push_back(CXXCast::CC_ConstCast);
     }
 
+    reportDiagnostic(CastOrder);
     replaceWithCast(CastOrder);
 
     auto &SourceManager = Context->getSourceManager();
@@ -71,18 +146,18 @@ public:
         SourceManager.getSpellingLoc(CastExpression->getBeginLoc());
     FullSourceLoc DiagnosticLocation = FullSourceLoc(Loc, SourceManager);
     if (Loc.isInvalid()) {
-      llvm::outs() << "Loc invalid"
+      outs() << "Loc invalid"
                    << "\n";
       return;
     }
     const FileEntry *FileEntry =
         SourceManager.getFileEntryForID(SourceManager.getFileID(Loc));
     if (!FileEntry) {
-      llvm::outs() << "File entry invalid"
+      outs() << "File entry invalid"
                    << "\n";
       return;
     }
-    llvm::outs() << "Found c-style cast expression in file "
+    outs() << "Found c-style cast expression in file "
                  << FileEntry->getName() << " on line "
                  << DiagnosticLocation.getSpellingLineNumber()
                  << ".\n";
@@ -98,13 +173,6 @@ int main(int argc, const char **argv) {
   // create a new Clang Tool instance (a LibTooling environment)
   tooling::RefactoringTool Tool(op.getCompilations(), op.getSourcePathList());
 
-  /// ===
-  // std::string code = "#include <stdint.h>\nvoid f(){\n(bool) 3.2f;\n(int) true;\nint x = 2;\nchar c = 'a';\nconst int& y = (const int&) x;\n(const float*) &x;}"; std::unique_ptr<clang::ASTUnit> ast(clang::tooling::buildASTFromCode(code));
-
-  // now you have the AST for the code snippet
-  //  clang::ASTContext * pctx = &(ast->getASTContext());
-  //  clang::TranslationUnitDecl * decl = pctx->getTranslationUnitDecl();
-  /// ===
   std::vector<std::unique_ptr<ASTUnit>> ASTs;
 
   int Status = Tool.buildASTs(ASTs);
@@ -114,7 +182,7 @@ int main(int argc, const char **argv) {
     return 1;
   } else if (Status == 2) {
     ASTStatus |= 1;
-    llvm::errs() << "Failed to build AST for some of the files, "
+    errs() << "Failed to build AST for some of the files, "
                  << "results may be incomplete."
                  << "\n";
   } else {
@@ -124,15 +192,40 @@ int main(int argc, const char **argv) {
   CStyleCastReplacer Replacer(Tool.getReplacements());
   MatchFinder Finder;
   Finder.addMatcher(CStyleCastMatcher, &Replacer);
+  auto Factory = tooling::newFrontendActionFactory(&Finder);
+
+  // Add diagnostics
+  int ExitCode = Tool.run(Factory.get());
+  LangOptions DefaultLangOptions;
+  IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts(new DiagnosticOptions());
+  TextDiagnosticPrinter DiagnosticPrinter(errs(), &*DiagOpts);
+  DiagnosticsEngine Diagnostics(
+      IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs()), &*DiagOpts,
+      &DiagnosticPrinter, false);
+
+  auto &FileMgr = Tool.getFiles();
+  SourceManager Sources(Diagnostics, FileMgr);
+  Rewriter Rewrite(Sources, DefaultLangOptions);
+
+  return ExitCode;
+  // Tool.runAndSave(Factory.get());
+
+  /// ===
+  // std::string code = "#include <stdint.h>\nvoid f(){\n(bool) 3.2f;\n(int) true;\nint x = 2;\nchar c = 'a';\nconst int& y = (const int&) x;\n(const float*) &x;}"; std::unique_ptr<clang::ASTUnit> ast(clang::tooling::buildASTFromCode(code));
+
+  // now you have the AST for the code snippet
+  //  clang::ASTContext * pctx = &(ast->getASTContext());
+  //  clang::TranslationUnitDecl * decl = pctx->getTranslationUnitDecl();
+  /// ===
 //
 //  for (const auto &ast : ASTs) {
 //    Finder.matchAST(ast->getASTContext());
 //  }
 //
-//  llvm::outs() << "Replacements collected by the tool:\n";
+//  outs() << "Replacements collected by the tool:\n";
 //  auto toString = [](const tooling::Replacements& Replaces) {
 //    std::string Result;
-//    llvm::raw_string_ostream Stream(Result);
+//    raw_string_ostream Stream(Result);
 //    for (const auto Replace : Replaces) {
 //      Stream << Replace.getFilePath() << ": " << Replace.getOffset() << ":+"
 //             << Replace.getLength() << ":\"" << Replace.getReplacementText()
@@ -141,11 +234,8 @@ int main(int argc, const char **argv) {
 //    return Stream.str();
 //  };
 //  for (auto &p : Tool.getReplacements()) {
-//    llvm::outs() << p.first << ":" << toString(p.second) << "\n";
+//    outs() << p.first << ":" << toString(p.second) << "\n";
 //  }
-
-  auto ActionPtr = tooling::newFrontendActionFactory(&Finder);
-  Tool.runAndSave(ActionPtr.get());
 
 //  int result = Tool.run(tooling::newFrontendActionFactory(&Finder).get());
   /// === begin random snippet
