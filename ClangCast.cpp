@@ -97,7 +97,7 @@ public:
         // Case 6
         else {
           DiagMessage += ("'const_cast<" + CanonicalCastType.getAsString() + ">("
-                          + "'reinterpret_cast<" + changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getAsString() + ">())'");
+                          + "reinterpret_cast<" + changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getAsString() + ">())'");
         }
       }
       // Case 7

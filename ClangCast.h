@@ -212,6 +212,8 @@ bool isQualifierModified(const QualType& CanonicalSubExprType,
   //
   // We must also take care of the case of nested pointers to array.
   // (const int(*)[2]) &arr;
+  //
+  // 
   if (CanonicalCastType->isPointerType()) {
     QualType StrippedCastType = StripPtrLayer(CanonicalCastType);
     if (CanonicalSubExprType->isPointerType()) {
@@ -260,6 +262,12 @@ CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
 }
 
 /// TODO: Test this with pointers, arrays, and references.
+/// TODO: Test this with multi-level pointers like:
+///       (const int***) (int*) doesn't need to change qualifiers
+///       (const int*) (int***) doesn't need to change qualifiers
+///       (const int**) (int**) DOES need to change qualifiers.
+///       This just means the constness is only up to the least level of the
+///       cast or subexpression type.
 /// Given a QualType From with a set of qualifiers, return a copy of From
 /// with the same underlying type but with the qualifiers modified to be To.
 /// We require From and To to be canonical, otherwise it is undefined behavior.
@@ -288,9 +296,13 @@ QualType changeQualifiers(QualType From, const QualType To, const ASTContext* Co
       QualType StrippedTo = StripPtrLayer(To);
       From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
     }
-    if (To->isArrayType()) {
+    else if (To->isArrayType()) {
       QualType StrippedTo = StripArrayLayer(To);
       From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
+    }
+    // We've reached a terminal non-pointer type
+    else {
+
     }
   }
   // We don't need to check if it's a reference type.
