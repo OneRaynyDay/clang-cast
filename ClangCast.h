@@ -175,9 +175,15 @@ CXXCast castHelper(const Expr* Expression,
 ///         false otherwise.
 bool isQualifierModified(const QualType& CanonicalSubExprType,
                          const QualType& CanonicalCastType) {
-  bool CurrentEquals = ((CanonicalSubExprType.isConstQualified() == CanonicalCastType.isConstQualified()) &&
-                        (CanonicalSubExprType.isVolatileQualified() == CanonicalCastType.isVolatileQualified()) &&
-                        (CanonicalSubExprType.isRestrictQualified() == CanonicalCastType.isRestrictQualified()));
+  // Whenever we encounter an array, it doesn't matter if the qualifier is
+  // const or not. All of the below works:
+  //
+  //  double m[2];
+  //  reinterpret_cast<double*>(m);
+  //  reinterpret_cast<const double*>(m);
+  //  reinterpret_cast<const double* const>(m);
+  bool CurrentEquals = CanonicalSubExprType->isArrayType() || CanonicalSubExprType.getLocalFastQualifiers() ==
+                         CanonicalCastType.getLocalFastQualifiers();
 
   if (!CurrentEquals) {
     return true;
@@ -212,17 +218,41 @@ bool isQualifierModified(const QualType& CanonicalSubExprType,
   //
   // We must also take care of the case of nested pointers to array.
   // (const int(*)[2]) &arr;
+  // for example:
   //
-  // 
+  // COMPILES:
+  // (pointer to array of triple const pointers to const pointers to const doubles
+  // is OK because the base layer is double compared with pointer of const things
+  // so since the pointer itself is not const, we're fine)
+  // const double * const * (*a) [2];
+  // reinterpret_cast<double**>(a);
+  //
+  // FAILS(Warning):
+  // (pointer of array of const doubles fails because the base layer is double
+  // compared to const double)
+  // const double (*a) [2];
+  // reinterpret_cast<double**>(a);
+  //
+  // Clang warns with the following:
+  // warning: ISO C++ does not allow reinterpret_cast from
+  // 'const double (*)[2]' to 'double **' because it casts away qualifiers,
+  // even though the source and destination types are unrelated
+  // [-Wcast-qual-unrelated]
+  //
+  // Therefore if we see an array in the middle of the pointer chain, we stop
+  // checking beyond the type underneath it.
   if (CanonicalCastType->isPointerType()) {
     QualType StrippedCastType = StripPtrLayer(CanonicalCastType);
     if (CanonicalSubExprType->isPointerType()) {
       QualType StrippedSubExprType = StripPtrLayer(CanonicalSubExprType);
       return isQualifierModified(StrippedSubExprType, StrippedCastType);
     }
+    // Go one layer below array to deal with the ISO warning, and don't go
+    // any further.
     if (CanonicalSubExprType->isArrayType()) {
       QualType StrippedSubExprType = StripArrayLayer(CanonicalSubExprType);
-      return isQualifierModified(StrippedSubExprType, StrippedCastType);
+      return StrippedSubExprType.getLocalFastQualifiers() ==
+             StrippedCastType.getLocalFastQualifiers();
     }
   }
 
