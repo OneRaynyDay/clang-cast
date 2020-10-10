@@ -11,22 +11,29 @@ void f() {
 )";
 
 /// Const
+/// Adding const doesn't require const_cast
 static const char QualAddConst[] = R"(
 void f() {
   int x = 0;
   (const int) x;
 }
 )";
-static const char QualAddConstPtr[] = R"(
+static const char QualAddPtrToConst[] = R"(
 void f() {
   int* x = nullptr;
   const int* y = (const int*) x;
 }
 )";
+static const char QualAddConstPtr[] = R"(
+void f() {
+  int* x = nullptr;
+  int* const y = (int* const) x;
+}
+)";
 static const char QualAddConstDoublePtr[] = R"(
 void f() {
   int** x = nullptr;
-  const int** y = (const int**) x;
+  int* const * const y = (int* const * const) x;
 }
 )";
 static const char QualAddConstRef[] = R"(
@@ -42,10 +49,78 @@ void f() {
   const double* ca = (const double*) a;
 }
 )";
-static const char QualAddConstArrPtr[] = R"(
+static const char QualAddConstPtrToArr[] = R"(
 void f() {
-  double a[2] {1, 2};
-  (const double(*)[2]) &a;
+  double (*a)[2] {};
+  (double(* const)[2]) a;
+}
+)";
+static const char QualAddConstPtrToArrOfConstPtrs[] = R"(
+void f() {
+  double* (*a)[2] {};
+  (double * const (* const)[2]) a;
+}
+)";
+static const char QualAddArrPtrConstData[] = R"(
+void f() {
+  double (*a)[2] {};
+  (const double(*)[2]) a;
+}
+)";
+/// Removing const MIGHT require const_cast
+static const char QualRemoveConst[] = R"(
+void f() {
+  const int x = 0;
+  (int) x;
+}
+)";
+static const char QualRemovePtrToConst[] = R"(
+void f() {
+  const int* x = nullptr;
+  int* y = (int*) x;
+}
+)";
+static const char QualRemoveConstPtr[] = R"(
+void f() {
+  int* const x = nullptr;
+  int* y = (int*) x;
+}
+)";
+static const char QualRemoveConstDoublePtr[] = R"(
+void f() {
+  int* const * const x = nullptr;
+  int** y = (int**) x;
+}
+)";
+static const char QualRemoveConstRef[] = R"(
+void f() {
+  int x = 1;
+  const int& y = x;
+  int& z = (int&) y;
+}
+)";
+static const char QualRemoveConstArr[] = R"(
+void f() {
+  const double a[2] {1, 2};
+  double* ca = (double*) a;
+}
+)";
+static const char QualRemoveConstPtrToArr[] = R"(
+void f() {
+  double (* const a)[2] {};
+  (double(*)[2]) a;
+}
+)";
+static const char QualRemoveConstPtrToArrOfConstPtrs[] = R"(
+void f() {
+  double* const (* const a)[2] {};
+  (double* (*)[2]) a;
+}
+)";
+static const char QualRemoveArrPtrConstData[] = R"(
+void f() {
+  const double (*a)[2] {};
+  (double(*)[2]) a;
 }
 )";
 

@@ -173,103 +173,197 @@ CXXCast castHelper(const Expr* Expression,
 ///
 /// \return true if the qualifier is modified from the cast expression,
 ///         false otherwise.
-bool isQualifierModified(const QualType& CanonicalSubExprType,
-                         const QualType& CanonicalCastType) {
-  // Whenever we encounter an array, it doesn't matter if the qualifier is
-  // const or not. All of the below works:
-  //
-  //  double m[2];
-  //  reinterpret_cast<double*>(m);
-  //  reinterpret_cast<const double*>(m);
-  //  reinterpret_cast<const double* const>(m);
-  bool CurrentEquals = CanonicalSubExprType->isArrayType() || CanonicalSubExprType.getLocalFastQualifiers() ==
-                         CanonicalCastType.getLocalFastQualifiers();
+//bool isQualifierModified(const QualType& CanonicalSubExprType,
+//                         const QualType& CanonicalCastType) {
+//  llvm::outs() << "The type: " << CanonicalSubExprType.getAsString() << " with cvr mask: " << CanonicalSubExprType.getLocalFastQualifiers() << "\n";
+//  // Whenever we encounter an array, it doesn't matter if the qualifier is
+//  // const or not. All of the below works:
+//  //
+//  //  double m[2];
+//  //  reinterpret_cast<double*>(m);
+//  //  reinterpret_cast<const double*>(m);
+//  //  reinterpret_cast<const double* const>(m);
+//  bool CurrentEquals = CanonicalSubExprType->isArrayType() || CanonicalSubExprType.getLocalFastQualifiers() ==
+//                         CanonicalCastType.getLocalFastQualifiers();
+//
+//  if (!CurrentEquals) {
+//    return true;
+//  }
+//
+//  auto StripPtrLayer = [](const QualType& QualifiedType) -> QualType {
+//    const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
+//    return PtrType->getPointeeType();
+//  };
+//
+//  auto StripRefLayer = [](const QualType& QualifiedType) -> QualType {
+//    return QualifiedType.getNonReferenceType();
+//  };
+//
+//  auto StripArrayLayer = [](const QualType& QualifiedType) -> QualType {
+//    const ArrayType *ArrType = dyn_cast<ArrayType>(QualifiedType);
+//    return ArrType->getElementType();
+//  };
+//
+//  // Case 1 - multilevel pointers/arrays
+//  // According to the standards:
+//  // "Two possibly multilevel pointers to the same type may be
+//  // converted between each other, regardless of cv-qualifiers at each level."
+//  //
+//  // One can only cast arrays to pointer types and not vice versa, i.e.:
+//  // int arr[] {1,2};
+//  // (const int*) arr;
+//  //
+//  // We must also take care of the case of nested pointers to array.
+//  // (const int(*)[2]) &arr;
+//  // for example:
+//  //
+//  // COMPILES:
+//  // (pointer to array of triple const pointers to const pointers to const doubles
+//  // is OK because the base layer is double compared with pointer of const things
+//  // so since the pointer itself is not const, we're fine)
+//  // const double * const * (*a) [2];
+//  // reinterpret_cast<double**>(a);
+//  //
+//  // FAILS(Warning):
+//  // (pointer of array of const doubles fails because the base layer is double
+//  // compared to const double)
+//  // const double (*a) [2];
+//  // reinterpret_cast<double**>(a);
+//  //
+//  // Clang warns with the following:
+//  // warning: ISO C++ does not allow reinterpret_cast from
+//  // 'const double (*)[2]' to 'double **' because it casts away qualifiers,
+//  // even though the source and destination types are unrelated
+//  // [-Wcast-qual-unrelated]
+//  //
+//  // Therefore if we see an array in the middle of the pointer chain, we stop
+//  // checking beyond the type underneath it.
+//  if (CanonicalCastType->isPointerType()) {
+//    QualType StrippedCastType = StripPtrLayer(CanonicalCastType);
+//    if (CanonicalSubExprType->isPointerType()) {
+//      QualType StrippedSubExprType = StripPtrLayer(CanonicalSubExprType);
+//      return isQualifierModified(StrippedSubExprType, StrippedCastType);
+//    }
+//    // Go one layer below array to deal with the ISO warning, and don't go
+//    // any further.
+//    if (CanonicalSubExprType->isArrayType()) {
+//      QualType StrippedSubExprType = StripArrayLayer(CanonicalSubExprType);
+//      return StrippedSubExprType.getLocalFastQualifiers() ==
+//             StrippedCastType.getLocalFastQualifiers();
+//    }
+//  }
+//
+//  // Case 2 (fallthrough) - lvalue reference cast to r/lvalue reference
+//  // It's the case that the SubExpr, even if it is a reference, it's not
+//  // reflected in value categories in the AST. So we only remove ref
+//  // on the cast type.
+//  // Refer to requireConstCast comments for more information.
+//  if(CanonicalCastType->isReferenceType()) {
+//    return isQualifierModified(CanonicalSubExprType,
+//                               StripRefLayer(CanonicalCastType));
+//  }
+//  // Case 1 - Root case: There are no more layers of pointers.
+//  return false;
+//}
 
-  if (!CurrentEquals) {
+QualType stripPtrLayer(const QualType &QualifiedType) {
+  const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
+  return PtrType->getPointeeType();
+}
+
+
+QualType stripArrLayer(const QualType &QualifiedType, const ASTContext* Context) {
+  const ArrayType *ArrType = Context->getAsArrayType(QualifiedType);
+  return ArrType->getElementType();
+}
+
+bool qualifierDowncasted(const QualType &SubExpr, const QualType &CastType) {
+  // const -> non-const downcast
+  if (SubExpr.isConstQualified() && !CastType.isConstQualified())
     return true;
-  }
-
-  auto StripPtrLayer = [](const QualType& QualifiedType) -> QualType {
-    const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
-    return PtrType->getPointeeType();
-  };
-
-  auto StripRefLayer = [](const QualType& QualifiedType) -> QualType {
-    return QualifiedType.getNonReferenceType();
-  };
-
-  auto StripArrayLayer = [](const QualType& QualifiedType) -> QualType {
-    const ArrayType *ArrType = dyn_cast<ArrayType>(QualifiedType);
-    return ArrType->getElementType();
-  };
-
-  // TODO: Do we ever need to take care of casting to pointer-of-array?
-  // We can't ever cast to array, but this might be possible:
-  // https://stackoverflow.com/questions/20046429/casting-pointer-to-array-int-to-int2
-
-  // Case 1 - multilevel pointers/arrays
-  // According to the standards:
-  // "Two possibly multilevel pointers to the same type may be
-  // converted between each other, regardless of cv-qualifiers at each level."
-  //
-  // One can only cast arrays to pointer types and not vice versa, i.e.:
-  // int arr[] {1,2};
-  // (const int*) arr;
-  //
-  // We must also take care of the case of nested pointers to array.
-  // (const int(*)[2]) &arr;
-  // for example:
-  //
-  // COMPILES:
-  // (pointer to array of triple const pointers to const pointers to const doubles
-  // is OK because the base layer is double compared with pointer of const things
-  // so since the pointer itself is not const, we're fine)
-  // const double * const * (*a) [2];
-  // reinterpret_cast<double**>(a);
-  //
-  // FAILS(Warning):
-  // (pointer of array of const doubles fails because the base layer is double
-  // compared to const double)
-  // const double (*a) [2];
-  // reinterpret_cast<double**>(a);
-  //
-  // Clang warns with the following:
-  // warning: ISO C++ does not allow reinterpret_cast from
-  // 'const double (*)[2]' to 'double **' because it casts away qualifiers,
-  // even though the source and destination types are unrelated
-  // [-Wcast-qual-unrelated]
-  //
-  // Therefore if we see an array in the middle of the pointer chain, we stop
-  // checking beyond the type underneath it.
-  if (CanonicalCastType->isPointerType()) {
-    QualType StrippedCastType = StripPtrLayer(CanonicalCastType);
-    if (CanonicalSubExprType->isPointerType()) {
-      QualType StrippedSubExprType = StripPtrLayer(CanonicalSubExprType);
-      return isQualifierModified(StrippedSubExprType, StrippedCastType);
-    }
-    // Go one layer below array to deal with the ISO warning, and don't go
-    // any further.
-    if (CanonicalSubExprType->isArrayType()) {
-      QualType StrippedSubExprType = StripArrayLayer(CanonicalSubExprType);
-      return StrippedSubExprType.getLocalFastQualifiers() ==
-             StrippedCastType.getLocalFastQualifiers();
-    }
-  }
-
-  // Case 2 (fallthrough) - lvalue reference cast to r/lvalue reference
-  // It's the case that the SubExpr, even if it is a reference, it's not
-  // reflected in value categories in the AST. So we only remove ref
-  // on the cast type.
-  // Refer to requireConstCast comments for more information.
-  if(CanonicalCastType->isReferenceType()) {
-    return isQualifierModified(CanonicalSubExprType,
-                               StripRefLayer(CanonicalCastType));
-  }
-  // Case 1 - Root case: There are no more layers of pointers.
+  // volatile -> non-volatile downcast
+  if (SubExpr.isVolatileQualified() && !CastType.isVolatileQualified())
+    return true;
+  // restrict -> non-restrict downcast
+  if (SubExpr.isRestrictQualified() && !CastType.isRestrictQualified())
+    return true;
   return false;
 }
 
+/// \param SubExpr, a copy of QualType subexpression
+/// \param CastType, a copy of QualType cast type
+/// \param Context, the ASTContext pointer used for auxilliary functions
+/// \param Skip, whether or not to skip a downcast
+/// \return true if the qualifier is downcasted from the possibly nested ptr or
+///         pod/array type, false otherwise.
+bool recurseDowncastCheck(const QualType& SubExpr,
+                          const QualType& CastType,
+                          const ASTContext* Context,
+                          bool& Skip) {
+  if (Skip) {
+    Skip = false;
+  }
+  else if (details::qualifierDowncasted(SubExpr, CastType)) {
+    return true;
+  }
+
+  bool SubExprPtr = SubExpr->isPointerType();
+  bool CastTypePtr = CastType->isPointerType();
+  bool SubExprArr = SubExpr->isArrayType();
+  bool CastTypeArr = CastType->isArrayType();
+
+  llvm::outs() << "ehm..." << SubExpr.getAsString() << " and " << CastType.getAsString() << "..." << SubExprPtr << " " << CastTypePtr << " " << SubExprArr << " " << CastTypeArr << "\n\n\n";
+  llvm::outs() << "qualifiers? : " << SubExpr.getLocalFastQualifiers() << " vs. " << CastType.getLocalFastQualifiers() << "\n";
+
+  // Special edge case: clang treats arrays as a layer over the original type.
+  // we simply peel over the array layer and return whatever's underneath.
+  // NOTE: this disregards Skip, which is ok as well (since it would skip the array layer which can't have qualifiers)
+  if(SubExprArr || CastTypeArr) {
+    // if either can't be descended further (is not array or pointer), then false for no downcast occurred.
+    if((!SubExprPtr && !SubExprArr) || (!CastTypePtr && !CastTypeArr))
+      return false;
+    // if they both can be descended, then cast them down 1 level and do a comparison.
+    QualType SubExprStripped = SubExprPtr ? details::stripPtrLayer(SubExpr) : details::stripArrLayer(SubExpr, Context);
+    QualType CastTypeStripped = CastTypePtr ? details::stripPtrLayer(CastType) : details::stripArrLayer(CastType, Context);
+    llvm::outs() << "hmm... " << SubExprStripped.getAsString() << " vs. " << CastTypeStripped.getAsString() << "\n\n";
+    llvm::outs() << "qualifiers? : " << SubExprStripped.getLocalFastQualifiers() << " vs. " << CastTypeStripped.getLocalFastQualifiers() << "\n";
+    return details::qualifierDowncasted(SubExprStripped, CastTypeStripped);
+  }
+
+  // Continue recursing for pointer types
+  if(SubExprPtr && CastTypePtr) {
+    return recurseDowncastCheck(details::stripPtrLayer(SubExpr), details::stripPtrLayer(CastType), Context, Skip);
+  }
+  return false;
+};
+
+
 } // namespace details
+
+// TODO: Add tests for templates - how do we tell if templates are pointer types/ref types?
+bool requireConstCast(QualType CanonicalSubExprType,
+                      QualType CanonicalCastType,
+                      const ASTContext* Context) {
+  // Implicit conversion can perform the first qualifier cast without
+  // a const_cast.
+  bool SkipFirstQualifiers = true;
+
+  // Case 1 - reference type:
+  // remove the reference from both the subexpr and cast and add a pointer level.
+  if (CanonicalCastType->isReferenceType()) {
+    CanonicalCastType = CanonicalCastType.getNonReferenceType();
+    if (CanonicalSubExprType->isReferenceType()) {
+      CanonicalSubExprType = CanonicalSubExprType.getNonReferenceType();
+    }
+    CanonicalCastType = Context->getPointerType(CanonicalCastType);
+    CanonicalSubExprType = Context->getPointerType(CanonicalSubExprType);
+  }
+
+  // Case 2, 3 - pointer type & POD type
+  // if the pointer qualifiers are downcasted at any level, then fail.
+  // if the POD qualifiers are downcasted, then fail.
+  return details::recurseDowncastCheck(CanonicalSubExprType, CanonicalCastType, Context, SkipFirstQualifiers);
+}
 
 /// Main function for determining CXX cast type.
 /// Recursively demote from const cast level.
@@ -312,9 +406,6 @@ QualType changeQualifiers(QualType From, const QualType To, const ASTContext* Co
     const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
     return PtrType->getPointeeType();
   };
-  auto StripRefLayer = [](const QualType& QualifiedType) -> QualType {
-    return QualifiedType.getNonReferenceType();
-  };
   auto StripArrayLayer = [](const QualType& QualifiedType) -> QualType {
     const ArrayType *ArrType = dyn_cast<ArrayType>(QualifiedType);
     return ArrType->getElementType();
@@ -340,32 +431,6 @@ QualType changeQualifiers(QualType From, const QualType To, const ASTContext* Co
   QualType Res = From.getUnqualifiedType();
   Res.setLocalFastQualifiers(To.getLocalFastQualifiers());
   return Res;
-}
-
-// TODO: Add tests for templates - how do we tell if templates are pointer types/ref types?
-bool requireConstCast(const QualType& CanonicalSubExprType,
-                      const QualType& CanonicalCastType) {
-  // (1) If CastType is a reference type, SubExprType may not be, even if it is
-  // defined as an lvalue reference.
-  // For example:
-  //
-  // int& y = x;
-  // const int& z = (const int&) y;
-  //
-  // Is represented as:
-  // SubExpr(y): BuiltinType 'int'
-  // CastType(const int&): LValueReferenceType 'const int &'
-  //                       `-QualType 'const int' const
-  //                         `-BuiltinType 'int'
-  // (2) We don't explicitly check for the type because even if we are
-  // performing a reinterpret cast from int to float&, or bool* to long*,
-  // that will be checked from getCastKindFromCStyleCast,
-  // but if any qualifiers are changed, a const cast is needed after anyways.
-  if (((CanonicalSubExprType->isPointerType() || CanonicalSubExprType->isArrayType())
-      && CanonicalCastType->isPointerType()) ||
-      CanonicalCastType->isReferenceType())
-    return details::isQualifierModified(CanonicalSubExprType, CanonicalCastType);
-  return false;
 }
 
 /// Given a CastExpr, determine from its CastKind and other metadata
@@ -427,7 +492,6 @@ CXXCast getCastType(const CastExpr* CastExpression,
     case CastKind::CK_MemberPointerToBoolean:
     case CastKind::CK_UserDefinedConversion:
     case CastKind::CK_ConstructorConversion:
-    case CastKind::CK_IntegralToPointer:
     case CastKind::CK_PointerToBoolean:
     case CastKind::CK_ToVoid:
     // vector splats are constant size vectors that can be
@@ -470,6 +534,7 @@ CXXCast getCastType(const CastExpr* CastExpression,
     /// Reinterpret cast types
     case CastKind::CK_BitCast:
     case CastKind::CK_LValueBitCast:
+    case CastKind::CK_IntegralToPointer:
     case CastKind::CK_LValueToRValueBitCast:
     case CastKind::CK_ReinterpretMemberPointer:
     case CastKind::CK_PointerToIntegral:

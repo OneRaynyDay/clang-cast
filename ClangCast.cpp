@@ -30,6 +30,66 @@ class CStyleCastReplacer : public MatchFinder::MatchCallback {
 public:
   CStyleCastReplacer(ReplacementsMap& Replacements) : Replacements(Replacements) {}
 
+  /// Given an ordered list of casts, use the ASTContext to report necessary
+  /// changes to the cast expression.
+  unsigned reportDiagnostic(const std::vector<CXXCast>& casts,
+                        const ASTContext* Context,
+                        const QualType& CanonicalSubExpressionType,
+                        const QualType& CanonicalCastType){
+    DiagnosticsEngine &DiagEngine = Context->getDiagnostics();
+    // Set diagnostics to warning by default, and to INFO for edge cases.
+    DiagnosticIDs::Level DiagLevel = DiagnosticIDs::Warning;
+    std::string DiagMessage = "The C-style cast can be substituted for ";
+    assert (!casts.empty());
+    // There are 8 different situations in which we want to provide
+    // different messages for.
+    // 1. No-op cast (remove the cast)
+    // 2. Only const cast
+    // 3. Static cast
+    // 4. Static cast + const cast
+    // 5. Reinterpret cast
+    // 6. Reinterpret cast + const cast
+    // 7. C style cast (keep the cast as is)
+    // 8. Invalid cast (this should never happen, and would be a bug)
+    bool ConstCastRequired = casts.size() > 1 && casts[1] == CXXCast::CC_ConstCast;
+    if (casts[0] == CXXCast::CC_NoOpCast) {
+      // Case 1
+      if (!ConstCastRequired) {
+        DiagMessage = "No cast is necessary (no-op)";
+        DiagLevel = DiagnosticIDs::Remark;
+      }
+        // Case 2
+      else {
+        DiagMessage += "'const_cast<" + CanonicalCastType.getAsString() + ">'";
+      }
+    }
+    else if (casts[0] == CXXCast::CC_StaticCast || casts[0] == CXXCast::CC_ReinterpretCast) {
+      std::string CastType = casts[0] == CXXCast::CC_StaticCast ? "static_cast" : "reinterpret_cast";
+      // Case 3,5
+      if (!ConstCastRequired) {
+        DiagMessage += "'" + CastType + "<" + CanonicalCastType.getAsString() + ">'";
+      }
+        // Case 4,6
+      else {
+        DiagMessage += ("'const_cast<" + CanonicalCastType.getAsString() + ">("
+                        + "'" + CastType + "<" + changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getAsString() + ">())'");
+      }
+    }
+    // Case 7
+    else if (casts[0] == CXXCast::CC_CStyleCast) {
+      DiagMessage = "Cannot infer C++ style cast. Keeping C-style cast";
+      DiagLevel = DiagnosticIDs::Remark;
+    }
+    // Case 8
+    else if (casts[0] == CXXCast::CC_InvalidCast) {
+      DiagMessage = "clang-casts has encountered an error. Currently does not support the following cast";
+      DiagLevel = DiagnosticIDs::Error;
+    }
+
+    return DiagEngine.getDiagnosticIDs()->getCustomDiagID(
+        DiagLevel, DiagMessage);
+  }
+
   virtual void run(const MatchFinder::MatchResult& Result) {
     ASTContext *Context = Result.Context;
     const CStyleCastExpr* CastExpression = Result.Nodes.getNodeAs<CStyleCastExpr>("cast");
@@ -48,74 +108,6 @@ public:
     const CharSourceRange CastRange = CharSourceRange::getTokenRange(
         CastExpression->getLParenLoc(),
         CastExpression->getRParenLoc());
-
-    // Add diagnostics about the cast type
-    auto reportDiagnostic = [&](const std::vector<CXXCast>& casts){
-      DiagnosticsEngine &DiagEngine = Context->getDiagnostics();
-      // Set diagnostics to warning by default, and to INFO for edge cases.
-      DiagnosticIDs::Level DiagLevel = DiagnosticIDs::Warning;
-      std::string DiagMessage = "The C-style cast can be substituted for ";
-      assert (!casts.empty());
-      // There are 8 different situations in which we want to provide
-      // different messages for.
-      // 1. No-op cast (remove the cast)
-      // 2. Only const cast
-      // 3. Static cast
-      // 4. Static cast + const cast
-      // 5. Reinterpret cast
-      // 6. Reinterpret cast + const cast
-      // 7. C style cast (keep the cast as is)
-      // 8. Invalid cast (this should never happen, and would be a bug)
-      bool ConstCastRequired = casts.size() > 1 && casts[1] == CXXCast::CC_ConstCast;
-      if (casts[0] == CXXCast::CC_NoOpCast) {
-        // Case 1
-        if (!ConstCastRequired) {
-          DiagMessage = "No cast is necessary (no-op)";
-          DiagLevel = DiagnosticIDs::Remark;
-        }
-        // Case 2
-        else {
-          DiagMessage += "'const_cast<" + CanonicalCastType.getAsString() + ">'";
-        }
-      }
-      else if (casts[0] == CXXCast::CC_StaticCast) {
-        // Case 3
-        if (!ConstCastRequired) {
-          DiagMessage += "'static_cast<" + CanonicalCastType.getAsString() + ">'";
-        }
-        // Case 4
-        else {
-          DiagMessage += ("'const_cast<" + CanonicalCastType.getAsString() + ">("
-                          + "'static_cast<" + changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getAsString() + ">())'");
-        }
-      }
-      else if (casts[0] == CXXCast::CC_ReinterpretCast) {
-        // Case 5
-        if (!ConstCastRequired) {
-          DiagMessage += "'reinterpret_cast<" + CanonicalCastType.getAsString() + ">()'";
-        }
-        // Case 6
-        else {
-          DiagMessage += ("'const_cast<" + CanonicalCastType.getAsString() + ">("
-                          + "reinterpret_cast<" + changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getAsString() + ">())'");
-        }
-      }
-      // Case 7
-      else if (casts[0] == CXXCast::CC_CStyleCast) {
-        DiagMessage = "Cannot infer C++ style cast. Keeping C-style cast";
-        DiagLevel = DiagnosticIDs::Remark;
-      }
-      // Case 8
-      else if (casts[0] == CXXCast::CC_InvalidCast) {
-        DiagMessage = "clang-casts has encountered an error. Currently does not support the following cast";
-        DiagLevel = DiagnosticIDs::Error;
-      }
-
-      unsigned ID = DiagEngine.getDiagnosticIDs()->getCustomDiagID(
-          DiagLevel, DiagMessage);
-      // Reports the error at the location of the cast
-      DiagEngine.Report(CastExpression->getExprLoc(), ID);
-    };
 
     auto replaceWithCast = [&](const std::vector<CXXCast>& casts) {
       tooling::Replacement Rep(
@@ -138,7 +130,10 @@ public:
       CastOrder.push_back(CXXCast::CC_ConstCast);
     }
 
-    reportDiagnostic(CastOrder);
+    unsigned ID = reportDiagnostic(CastOrder, Context, CanonicalSubExpressionType, CanonicalCastType);
+    // Reports the error at the location of the cast
+    Context->getDiagnostics().Report(CastExpression->getExprLoc(), ID);
+
     replaceWithCast(CastOrder);
 
     auto &SourceManager = Context->getSourceManager();

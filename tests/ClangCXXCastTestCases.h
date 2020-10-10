@@ -110,11 +110,6 @@ void f() {
   (A) 10;
 }
 )";
-static const char IntegralToPointer[] = R"(
-void f() {
-  (int*) 10l;
-}
-)";
 static const char PointerToBoolean[] = R"(
 void f() {
   (bool) nullptr;
@@ -266,6 +261,11 @@ const char LValueBitCast[] = R"(
 void f() {
   char c;
   (bool&) c;
+}
+)";
+static const char IntegralToPointer[] = R"(
+void f() {
+  (int*) 10l;
 }
 )";
 // NOTE: Unused, as C style casts cannot
