@@ -271,23 +271,15 @@ QualType stripPtrLayer(const QualType &QualifiedType) {
   return PtrType->getPointeeType();
 }
 
-
+/// NOTE: If we don't use ASTContext.getAsArrayType(), we will lose the
+/// qualifiers on the element type.
 QualType stripArrLayer(const QualType &QualifiedType, const ASTContext* Context) {
   const ArrayType *ArrType = Context->getAsArrayType(QualifiedType);
   return ArrType->getElementType();
 }
 
-bool qualifierDowncasted(const QualType &SubExpr, const QualType &CastType) {
-  // const -> non-const downcast
-  if (SubExpr.isConstQualified() && !CastType.isConstQualified())
-    return true;
-  // volatile -> non-volatile downcast
-  if (SubExpr.isVolatileQualified() && !CastType.isVolatileQualified())
-    return true;
-  // restrict -> non-restrict downcast
-  if (SubExpr.isRestrictQualified() && !CastType.isRestrictQualified())
-    return true;
-  return false;
+bool isFunctionPtr(const QualType& Type) {
+  return Type->isMemberFunctionPointerType() || Type->isFunctionPointerType();
 }
 
 /// \param SubExpr, a copy of QualType subexpression
@@ -296,6 +288,9 @@ bool qualifierDowncasted(const QualType &SubExpr, const QualType &CastType) {
 /// \param Skip, whether or not to skip a downcast
 /// \return true if the qualifier is downcasted from the possibly nested ptr or
 ///         pod/array type, false otherwise.
+///
+/// NOTE: We are assuming that reinterpret_cast will have already taken care
+/// of the downcasting of nested function pointers.
 bool recurseDowncastCheck(const QualType& SubExpr,
                           const QualType& CastType,
                           const ASTContext* Context,
@@ -303,7 +298,7 @@ bool recurseDowncastCheck(const QualType& SubExpr,
   if (Skip) {
     Skip = false;
   }
-  else if (details::qualifierDowncasted(SubExpr, CastType)) {
+  else if (SubExpr.isMoreQualifiedThan(CastType)) {
     return true;
   }
 
@@ -327,7 +322,7 @@ bool recurseDowncastCheck(const QualType& SubExpr,
     QualType CastTypeStripped = CastTypePtr ? details::stripPtrLayer(CastType) : details::stripArrLayer(CastType, Context);
     llvm::outs() << "hmm... " << SubExprStripped.getAsString() << " vs. " << CastTypeStripped.getAsString() << "\n\n";
     llvm::outs() << "qualifiers? : " << SubExprStripped.getLocalFastQualifiers() << " vs. " << CastTypeStripped.getLocalFastQualifiers() << "\n";
-    return details::qualifierDowncasted(SubExprStripped, CastTypeStripped);
+    return SubExprStripped.isMoreQualifiedThan(CastTypeStripped);
   }
 
   // Continue recursing for pointer types
@@ -335,8 +330,7 @@ bool recurseDowncastCheck(const QualType& SubExpr,
     return recurseDowncastCheck(details::stripPtrLayer(SubExpr), details::stripPtrLayer(CastType), Context, Skip);
   }
   return false;
-};
-
+}
 
 } // namespace details
 
@@ -347,6 +341,11 @@ bool requireConstCast(QualType CanonicalSubExprType,
   // Implicit conversion can perform the first qualifier cast without
   // a const_cast.
   bool SkipFirstQualifiers = true;
+
+  // Case 0 - We just cannot cast function pointers at the very beginning, regardless of whether it's being downcasted or not.
+  if(details::isFunctionPtr(CanonicalCastType) || details::isFunctionPtr(CanonicalSubExprType)) {
+    return false;
+  }
 
   // Case 1 - reference type:
   // remove the reference from both the subexpr and cast and add a pointer level.
@@ -385,53 +384,45 @@ CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
                              CanonicalCastType);
 }
 
-/// TODO: Test this with pointers, arrays, and references.
-/// TODO: Test this with multi-level pointers like:
-///       (const int***) (int*) doesn't need to change qualifiers
-///       (const int*) (int***) doesn't need to change qualifiers
-///       (const int**) (int**) DOES need to change qualifiers.
-///       This just means the constness is only up to the least level of the
-///       cast or subexpression type.
-/// Given a QualType From with a set of qualifiers, return a copy of From
-/// with the same underlying type but with the qualifiers modified to be To.
-/// We require From and To to be canonical, otherwise it is undefined behavior.
-///     (To be precise, we don't get rid of qualifiers from typedefs)
+/// We first perform static/reinterpret casts and then const cast.
+/// There is only one case where we'd need to modify qualifiers and that is for
+/// function pointers. Const cast cannot change qualifiers on function pointers.
+/// TODO IMPORTANT:
+///   If we encounter a function pointer, we must perform the cast here.
 ///
-/// \param From, a copy of QualType cast expression
-/// \param To, a copy of QualType subexpression
-/// \return Res, a copy of From with To's (possibly nested) qualifiers
-QualType changeQualifiers(QualType From, const QualType To, const ASTContext* Context) {
-  // TODO: Remove this code duplication BS
-  auto StripPtrLayer = [](const QualType& QualifiedType) -> QualType {
-    const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
-    return PtrType->getPointeeType();
-  };
-  auto StripArrayLayer = [](const QualType& QualifiedType) -> QualType {
-    const ArrayType *ArrType = dyn_cast<ArrayType>(QualifiedType);
-    return ArrType->getElementType();
-  };
-
-  if (From->isPointerType()) {
-    QualType StrippedFrom = StripPtrLayer(From);
-    if (To->isPointerType()) {
-      QualType StrippedTo = StripPtrLayer(To);
-      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
-    }
-    else if (To->isArrayType()) {
-      QualType StrippedTo = StripArrayLayer(To);
-      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
-    }
-    // We've reached a terminal non-pointer type
-    else {
-
-    }
-  }
-  // We don't need to check if it's a reference type.
-
-  QualType Res = From.getUnqualifiedType();
-  Res.setLocalFastQualifiers(To.getLocalFastQualifiers());
-  return Res;
-}
+///
+//QualType changeQualifiers(QualType From, const QualType To, const ASTContext* Context) {
+//  // TODO: Remove this code duplication BS
+//  auto StripPtrLayer = [](const QualType& QualifiedType) -> QualType {
+//    const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
+//    return PtrType->getPointeeType();
+//  };
+//  auto StripArrayLayer = [](const QualType& QualifiedType) -> QualType {
+//    const ArrayType *ArrType = dyn_cast<ArrayType>(QualifiedType);
+//    return ArrType->getElementType();
+//  };
+//
+//  if (From->isPointerType()) {
+//    QualType StrippedFrom = StripPtrLayer(From);
+//    if (To->isPointerType()) {
+//      QualType StrippedTo = StripPtrLayer(To);
+//      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
+//    }
+//    else if (To->isArrayType()) {
+//      QualType StrippedTo = StripArrayLayer(To);
+//      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
+//    }
+//    // We've reached a terminal non-pointer type
+//    else {
+//
+//    }
+//  }
+//  // We don't need to check if it's a reference type.
+//
+//  QualType Res = From.getUnqualifiedType();
+//  Res.setLocalFastQualifiers(To.getLocalFastQualifiers());
+//  return Res;
+//}
 
 /// Given a CastExpr, determine from its CastKind and other metadata
 /// the corresponding CXXCast to use (NOTE: this does not include
