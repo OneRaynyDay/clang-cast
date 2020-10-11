@@ -3,6 +3,12 @@
 
 namespace testcases {
 
+namespace modify {
+/// TODO ADD TESTS
+
+} // namespace modify
+
+namespace constcheck {
 /// No-op
 static const char QualNoOp[] = R"(
 void f() {
@@ -389,6 +395,8 @@ void f() {
   (double (*)[2]) a;
 }
 )";
+
+} // namespace constcheck
 
 } // namespace testcases
 

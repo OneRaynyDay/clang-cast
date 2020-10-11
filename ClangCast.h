@@ -290,7 +290,8 @@ bool isFunctionPtr(const QualType& Type) {
 ///         pod/array type, false otherwise.
 ///
 /// NOTE: We are assuming that reinterpret_cast will have already taken care
-/// of the downcasting of nested function pointers.
+/// of the downcasting of nested function pointers, and if we have
+/// nested function pointers, they have the same qualifiers.
 bool recurseDowncastCheck(const QualType& SubExpr,
                           const QualType& CastType,
                           const ASTContext* Context,
@@ -385,44 +386,46 @@ CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
 }
 
 /// We first perform static/reinterpret casts and then const cast.
-/// There is only one case where we'd need to modify qualifiers and that is for
+/// In order to do this, we must take the cast type and change its qualifiers
+/// so that it can be performed by static/reinterpret cast first.
+///
+/// NOTE: There is only one case where we'd need to modify qualifiers and that is for
 /// function pointers. Const cast cannot change qualifiers on function pointers.
-/// TODO IMPORTANT:
-///   If we encounter a function pointer, we must perform the cast here.
 ///
-///
-//QualType changeQualifiers(QualType From, const QualType To, const ASTContext* Context) {
-//  // TODO: Remove this code duplication BS
-//  auto StripPtrLayer = [](const QualType& QualifiedType) -> QualType {
-//    const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
-//    return PtrType->getPointeeType();
-//  };
-//  auto StripArrayLayer = [](const QualType& QualifiedType) -> QualType {
-//    const ArrayType *ArrType = dyn_cast<ArrayType>(QualifiedType);
-//    return ArrType->getElementType();
-//  };
-//
-//  if (From->isPointerType()) {
-//    QualType StrippedFrom = StripPtrLayer(From);
-//    if (To->isPointerType()) {
-//      QualType StrippedTo = StripPtrLayer(To);
-//      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
-//    }
-//    else if (To->isArrayType()) {
-//      QualType StrippedTo = StripArrayLayer(To);
-//      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
-//    }
-//    // We've reached a terminal non-pointer type
-//    else {
-//
-//    }
-//  }
-//  // We don't need to check if it's a reference type.
-//
-//  QualType Res = From.getUnqualifiedType();
-//  Res.setLocalFastQualifiers(To.getLocalFastQualifiers());
-//  return Res;
-//}
+/// \param From, the CastType, which needs to be modified to not require const cast
+/// \param To, the SubExpression, which has specific qualifiers on it.
+/// \param Context, ASTContext for helper
+/// \return QualType mirroring From but with qualifiers on To.
+QualType changeQualifiers(QualType From, const QualType To, const ASTContext* Context) {
+  if (From->isPointerType()) {
+    // If it's a function pointer, then we don't change the qualifier and we've
+    // reached the end.
+    if(details::isFunctionPtr(From))
+      return From;
+
+    // Recurse down on both
+    if (To->isPointerType()) {
+      QualType StrippedFrom = details::stripPtrLayer(From);
+      QualType StrippedTo = details::stripPtrLayer(To);
+      // modify the nested types
+      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
+    }
+  }
+  // Unwrap the references and reconstruct them
+  // but we don't need to strip To here.
+  else if (From->isLValueReferenceType()) {
+    return Context->getLValueReferenceType(changeQualifiers(From.getNonReferenceType(), To, Context));
+  }
+  else if (From->isRValueReferenceType()) {
+    return Context->getRValueReferenceType(changeQualifiers(From.getNonReferenceType(), To, Context));
+  }
+  // This includes all terminal types for const cast, which includes
+  // POD types and arrays, AS WELL as taking care of the pointer terminal case,
+  // where From is still a ptr but To (the subexpression) has reached a terminal
+  // case.
+  From.setLocalFastQualifiers(To.getLocalFastQualifiers());
+  return From;
+}
 
 /// Given a CastExpr, determine from its CastKind and other metadata
 /// the corresponding CXXCast to use (NOTE: this does not include

@@ -32,6 +32,7 @@
 
 
 using namespace testcases;
+using namespace testcases::constcheck;
 using namespace testcases::funcptr;
 using namespace clang;
 using namespace clang::tooling;
@@ -102,6 +103,42 @@ struct FunctionPtrDetector : MatchFinder::MatchCallback {
   }
 };
 
+struct QualifierChanger : MatchFinder::MatchCallback {
+  QualType ChangedCanonicalType;
+  QualifierChanger() = default;
+
+  virtual void run(const MatchFinder::MatchResult &Result) override {
+    ASTContext *Context = Result.Context;
+    const CStyleCastExpr* CastExpression = Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
+    if(!CastExpression) {
+      llvm::errs() << "This should never happen.\n";
+      return;
+    }
+    // TODO: remove after done testing
+    CastExpression->dump();
+    const Expr* SubExpression = CastExpression->getSubExprAsWritten();
+    QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
+    QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
+    ChangedCanonicalType = changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getCanonicalType();
+  }
+};
+
+struct DeclTypeMatcher : MatchFinder::MatchCallback {
+  QualType FoundCanonicalType;
+  DeclTypeMatcher() = default;
+
+  virtual void run(const MatchFinder::MatchResult &Result) override {
+    const VarDecl* DeclExpr = Result.Nodes.getNodeAs<VarDecl>(DeclVar);
+    if(!DeclExpr) {
+      llvm::errs() << "This should never happen.\n";
+      return;
+    }
+    // TODO: remove after done testing
+    DeclExpr->dump();
+    FoundCanonicalType = DeclExpr->getType().getCanonicalType();
+  }
+};
+
 /// Uses CStyleCastCollector to collect all CXXCast enums obtained
 /// and CastKinds encountered.
 class ClangCXXCastTest : public ::testing::Test {
@@ -150,6 +187,32 @@ protected:
     Finder.addMatcher(VarDeclMatcher, &Detector);
     Finder.matchAST(ast->getASTContext());
     return Detector.FoundFunctionPtr;
+  }
+};
+
+class ChangeQualifierTest : public ::testing::Test {
+  StatementMatcher CStyleCastMatcher;
+  DeclarationMatcher DeclMatcher;
+protected:
+  ChangeQualifierTest() : CStyleCastMatcher(cStyleCastExpr().bind(CastVar)),
+                                     DeclMatcher(varDecl().bind(DeclVar)) {}
+
+  bool parse(const StringRef CastCode, const StringRef ReferenceTypeCode) {
+    std::unique_ptr<clang::ASTUnit> CastAst(clang::tooling::buildASTFromCode(CastCode));
+    std::unique_ptr<clang::ASTUnit> TypeAst(clang::tooling::buildASTFromCode(ReferenceTypeCode));
+    QualifierChanger Changer;
+    DeclTypeMatcher TypeMatcher;
+    {
+      MatchFinder Finder;
+      Finder.addMatcher(CStyleCastMatcher, &Changer);
+      Finder.matchAST(CastAst->getASTContext());
+    }
+    {
+      MatchFinder Finder;
+      Finder.addMatcher(CStyleCastMatcher, &TypeMatcher);
+      Finder.matchAST(TypeAst->getASTContext());
+    }
+    return Changer.ChangedCanonicalType == TypeMatcher.FoundCanonicalType;
   }
 };
 
