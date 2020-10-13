@@ -3,11 +3,6 @@
 
 namespace testcases {
 
-namespace modify {
-/// TODO ADD TESTS
-
-} // namespace modify
-
 namespace constcheck {
 /// No-op
 static const char QualNoOp[] = R"(
@@ -48,6 +43,34 @@ void f() {
   const int** y = (const int**) x;
 }
 )";
+static const char QualAddMemberPtrToConst[] = R"(
+struct t{};
+void f() {
+  int t::* x = nullptr;
+  const int t::* y = (const int t::*) x;
+}
+)";
+static const char QualAddConstMemberPtr[] = R"(
+struct t{};
+void f() {
+  int t::* x = nullptr;
+  int t::* const y = (int t::* const) x;
+}
+)";
+static const char QualAddConstDoubleMemberPtr[] = R"(
+struct t{};
+void f() {
+  int t::* t::* x = nullptr;
+  int t::* const t::* const y = (int t::* const t::* const) x;
+}
+)";
+static const char QualAddConstDiffLevelMemberPtr[] = R"(
+struct t{};
+void f() {
+  int t::* t::* t::* x = nullptr;
+  const int t::* t::* y = (const int t::* t::*) x;
+}
+)";
 static const char QualAddConstRef[] = R"(
 void f() {
   int x = 1;
@@ -85,6 +108,14 @@ void f() {
   (const double* (*)[2]) a;
 }
 )";
+static const char QualAddConstMixedPtrTypes[] = R"(
+struct t {};
+void f() {
+  double * t::* (t::* *a) [2];
+  (const double * const t::* const (t::* const * const) [2]) a;
+}
+)";
+
 /// Removing const MIGHT require const_cast
 static const char QualRemoveConst[] = R"(
 void f() {
@@ -114,6 +145,34 @@ static const char QualRemoveConstDiffLevelPtr[] = R"(
 void f() {
   const int*** x = nullptr;
   int** y = (int**) x;
+}
+)";
+static const char QualRemoveMemberPtrToConst[] = R"(
+struct t{};
+void f() {
+  const int t::* x = nullptr;
+  int t::* y = (int t::*) x;
+}
+)";
+static const char QualRemoveConstMemberPtr[] = R"(
+struct t{};
+void f() {
+  int t::* const x = nullptr;
+  int t::* y = (int t::*) x;
+}
+)";
+static const char QualRemoveConstDoubleMemberPtr[] = R"(
+struct t{};
+void f() {
+  int t::* const  t::* const x = nullptr;
+  int t::* t::* y = (int t::* t::*) x;
+}
+)";
+static const char QualRemoveConstDiffLevelMemberPtr[] = R"(
+struct t{};
+void f() {
+  const int t::* t::* t::* x = nullptr;
+  int t::* t::* y = (int t::* t::*) x;
 }
 )";
 static const char QualRemoveConstRef[] = R"(
@@ -156,7 +215,14 @@ void f() {
 static const char QualRemoveSimilarPtrsBeyondArrConstData[] = R"(
 void f() {
   const double* const (* const a)[2] {};
-  (double* const (* const)[2])(a);
+  (double* const (* const)[2]) a;
+}
+)";
+static const char QualRemoveConstMixedPtrTypes[] = R"(
+struct t {};
+void f() {
+  const double * const t::* const (t::* const * const a) [2] {};
+  (double * t::* (t::* *) [2]) a;
 }
 )";
 
@@ -232,7 +298,14 @@ void f() {
 static const char QualRemoveSimilarPtrsBeyondArrVolatileData[] = R"(
 void f() {
   volatile double* volatile (* volatile a)[2] {};
-  (double* volatile (* volatile)[2])(a);
+  (double* volatile (* volatile)[2]) a;
+}
+)";
+static const char QualAddVolatileMixedPtrTypes[] = R"(
+struct t {};
+void f() {
+  double * t::* (t::* *a) [2];
+  (volatile double * volatile t::* volatile (t::* volatile * volatile) [2]) a;
 }
 )";
 /// remove
@@ -303,6 +376,13 @@ void f() {
   (double (*)[2]) a;
 }
 )";
+static const char QualRemoveVolatileMixedPtrTypes[] = R"(
+struct t {};
+void f() {
+  volatile double * volatile t::* volatile (t::* volatile * volatile a) [2] {};
+  (double * t::* (t::* *) [2]) a;
+}
+)";
 
 /// Restricted
 /// add
@@ -358,6 +438,14 @@ void f() {
   (double* __restrict *(*)[2]) a;
 }
 )";
+static const char QualAddRestrictMixedPtrTypes[] = R"(
+struct t {};
+void f() {
+  double * t::* (t::* *a) [2];
+  (double * __restrict t::* __restrict (t::* __restrict * __restrict) [2]) a;
+}
+)";
+
 /// remove
 static const char QualRemoveRestrictPtr[] = R"(
 void f() {
@@ -410,9 +498,17 @@ void f() {
 static const char QualRemoveSimilarPtrsBeyondArrRestrictData[] = R"(
 void f() {
   double* __restrict * __restrict (* __restrict a)[2] {};
-  (double* * __restrict (* __restrict)[2])(a);
+  (double* * __restrict (* __restrict)[2]) a;
 }
 )";
+static const char QualRemoveRestrictMixedPtrTypes[] = R"(
+struct t {};
+void f() {
+  double * __restrict t::* __restrict (t::* __restrict * __restrict a) [2] {};
+  (double * t::* (t::* *) [2]) a;
+}
+)";
+
 } // namespace constcheck
 
 } // namespace testcases

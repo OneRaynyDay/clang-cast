@@ -13,8 +13,8 @@
 #define CLANG_CXX_CAST_CHECK_SINGLE_TEST_CASE(cast_kind, cxx_cast)            \
   {                                                                           \
   auto res = parse(cast_kind);                                                \
-  ASSERT_GE(res.first.size(), 1);                                             \
-  ASSERT_EQ(res.second.size(), 1);                                            \
+  ASSERT_GE(res.first.size(), 1ul);                                             \
+  ASSERT_EQ(res.second.size(), 1ul);                                            \
   ASSERT_TRUE(res.first.find(CastKind::CK_##cast_kind) != res.first.end());   \
   ASSERT_EQ(res.second[0], CXXCast::CC_##cxx_cast);                           \
   }
@@ -44,109 +44,35 @@ using namespace clang::cppcast;
 static constexpr auto CastVar = "cast";
 static constexpr auto DeclVar = "varDecl";
 
-struct CStyleCastCollector : MatchFinder::MatchCallback {
-  std::vector<CXXCast> Casts;
-  std::set<CastKind> CastKinds;
-  CStyleCastCollector() = default;
-
-  virtual void run(const MatchFinder::MatchResult &Result) override {
-    const CStyleCastExpr* Expr = Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
-    if(!Expr) {
-      llvm::errs() << "This should never happen.\n";
-      return;
-    }
-    // TODO: remove after done testing
-    Expr->dump();
-    const CastExpr* GenericCastExpr = dyn_cast<CastExpr>(Expr);
-    // traverse the expr tree and set current expr
-    // node to GenericCastExpr.
-    while(GenericCastExpr) {
-      CastKinds.insert(GenericCastExpr->getCastKind());
-      GenericCastExpr = dyn_cast<CastExpr>(GenericCastExpr->getSubExpr());
-    }
-    Casts.push_back(cppcast::getCastKindFromCStyleCast(Expr));
-  }
-};
-
-struct QualifierChecker : MatchFinder::MatchCallback {
-  bool RequireConstCast;
-  QualifierChecker() = default;
-
-  virtual void run(const MatchFinder::MatchResult &Result) override {
-    ASTContext *Context = Result.Context;
-    const CStyleCastExpr* CastExpression = Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
-    if(!CastExpression) {
-      llvm::errs() << "This should never happen.\n";
-      return;
-    }
-    // TODO: remove after done testing
-    CastExpression->dump();
-//    const Expr* SubExpression = CastExpression->getSubExprAsWritten();
-//    QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
-//    QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
-    RequireConstCast = requireConstCast(CastExpression, Context);
-  }
-};
-
-struct FunctionPtrDetector : MatchFinder::MatchCallback {
-  bool FoundFunctionPtr;
-  FunctionPtrDetector() = default;
-
-  virtual void run(const MatchFinder::MatchResult &Result) override {
-    const VarDecl* DeclExpr = Result.Nodes.getNodeAs<VarDecl>(DeclVar);
-    if(!DeclExpr) {
-      llvm::errs() << "This should never happen.\n";
-      return;
-    }
-    // TODO: remove after done testing
-    DeclExpr->dump();
-    QualType CanonicalDeclType = DeclExpr->getType().getCanonicalType();
-    FoundFunctionPtr = details::isFunctionPtr(CanonicalDeclType);
-  }
-};
-
-struct QualifierChanger : MatchFinder::MatchCallback {
-  QualType ChangedCanonicalType;
-  QualifierChanger() = default;
-
-  virtual void run(const MatchFinder::MatchResult &Result) override {
-    ASTContext *Context = Result.Context;
-    const CStyleCastExpr* CastExpression = Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
-    if(!CastExpression) {
-      llvm::errs() << "This should never happen.\n";
-      return;
-    }
-    // TODO: remove after done testing
-    CastExpression->dump();
-    const Expr* SubExpression = CastExpression->getSubExprAsWritten();
-    QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
-    QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
-    ChangedCanonicalType = changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getCanonicalType();
-  }
-};
-
-struct DeclTypeMatcher : MatchFinder::MatchCallback {
-  QualType FoundCanonicalType;
-  DeclTypeMatcher() = default;
-
-  virtual void run(const MatchFinder::MatchResult &Result) override {
-    const VarDecl* DeclExpr = Result.Nodes.getNodeAs<VarDecl>(DeclVar);
-    if(!DeclExpr) {
-      llvm::errs() << "This should never happen.\n";
-      return;
-    }
-    // TODO: remove after done testing
-    DeclExpr->dump();
-    FoundCanonicalType = DeclExpr->getType().getCanonicalType();
-  }
-};
-
 /// Uses CStyleCastCollector to collect all CXXCast enums obtained
 /// and CastKinds encountered.
 class ClangCXXCastTest : public ::testing::Test {
   using CastKindSet = std::set<CastKind>;
   using CXXCastVector = std::vector<CXXCast>;
   StatementMatcher CStyleCastMatcher;
+
+  struct CStyleCastCollector : MatchFinder::MatchCallback {
+    std::vector<CXXCast> Casts;
+    std::set<CastKind> CastKinds;
+    CStyleCastCollector() = default;
+
+    virtual void run(const MatchFinder::MatchResult &Result) override {
+      const CStyleCastExpr* Expr = Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
+      if(!Expr) {
+        llvm::errs() << "This should never happen.\n";
+        return;
+      }
+      const CastExpr* GenericCastExpr = dyn_cast<CastExpr>(Expr);
+      // traverse the expr tree and set current expr
+      // node to GenericCastExpr.
+      while(GenericCastExpr) {
+        CastKinds.insert(GenericCastExpr->getCastKind());
+        GenericCastExpr = dyn_cast<CastExpr>(GenericCastExpr->getSubExpr());
+      }
+      Casts.push_back(cppcast::getCastKindFromCStyleCast(Expr));
+    }
+  };
+
 protected:
   ClangCXXCastTest() : CStyleCastMatcher(cStyleCastExpr().bind(CastVar)) {}
 
@@ -164,6 +90,22 @@ protected:
 
 class ClangQualifierModificationTest : public ::testing::Test {
   StatementMatcher CStyleCastMatcher;
+
+  struct QualifierChecker : MatchFinder::MatchCallback {
+    bool RequireConstCast;
+    QualifierChecker() = default;
+
+    virtual void run(const MatchFinder::MatchResult &Result) override {
+      ASTContext *Context = Result.Context;
+      const CStyleCastExpr* CastExpression = Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
+      if(!CastExpression) {
+        llvm::errs() << "This should never happen.\n";
+        return;
+      }
+      RequireConstCast = requireConstCast(CastExpression, Context);
+    }
+  };
+
 protected:
   ClangQualifierModificationTest() : CStyleCastMatcher(cStyleCastExpr().bind(CastVar)) {}
 
@@ -179,6 +121,22 @@ protected:
 
 class ClangFunctionPtrDetectionTest : public ::testing::Test {
   DeclarationMatcher VarDeclMatcher;
+
+  struct FunctionPtrDetector : MatchFinder::MatchCallback {
+    bool FoundFunctionPtr;
+    FunctionPtrDetector() = default;
+
+    virtual void run(const MatchFinder::MatchResult &Result) override {
+      const VarDecl* DeclExpr = Result.Nodes.getNodeAs<VarDecl>(DeclVar);
+      if(!DeclExpr) {
+        llvm::errs() << "This should never happen.\n";
+        return;
+      }
+      QualType CanonicalDeclType = DeclExpr->getType().getCanonicalType();
+      FoundFunctionPtr = details::isFunctionPtr(CanonicalDeclType);
+    }
+  };
+
 protected:
   ClangFunctionPtrDetectionTest() : VarDeclMatcher(varDecl().bind(DeclVar)) {}
 
@@ -195,6 +153,39 @@ protected:
 class ChangeQualifierTest : public ::testing::Test {
   StatementMatcher CStyleCastMatcher;
   DeclarationMatcher DeclMatcher;
+
+  struct QualifierChanger : MatchFinder::MatchCallback {
+    QualType ChangedCanonicalType;
+    QualifierChanger() = default;
+
+    virtual void run(const MatchFinder::MatchResult &Result) override {
+      ASTContext *Context = Result.Context;
+      const CStyleCastExpr* CastExpression = Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
+      if(!CastExpression) {
+        llvm::errs() << "This should never happen.\n";
+        return;
+      }
+      const Expr* SubExpression = CastExpression->getSubExprAsWritten();
+      QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
+      QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
+      ChangedCanonicalType = changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getCanonicalType();
+    }
+  };
+
+  struct DeclTypeMatcher : MatchFinder::MatchCallback {
+    QualType FoundCanonicalType;
+    DeclTypeMatcher() = default;
+
+    virtual void run(const MatchFinder::MatchResult &Result) override {
+      const VarDecl* DeclExpr = Result.Nodes.getNodeAs<VarDecl>(DeclVar);
+      if(!DeclExpr) {
+        llvm::errs() << "This should never happen.\n";
+        return;
+      }
+      FoundCanonicalType = DeclExpr->getType().getCanonicalType();
+    }
+  };
+
 protected:
   ChangeQualifierTest() : CStyleCastMatcher(cStyleCastExpr().bind(CastVar)),
                                      DeclMatcher(varDecl().bind(DeclVar)) {}
@@ -214,7 +205,6 @@ protected:
       Finder.addMatcher(DeclMatcher, &TypeMatcher);
       Finder.matchAST(TypeAst->getASTContext());
     }
-    llvm::outs() << "QUALIFIERS: " << Changer.ChangedCanonicalType.getAsString() << " vs. " << TypeMatcher.FoundCanonicalType.getAsString() << "\n";
     return Changer.ChangedCanonicalType.getAsString() == TypeMatcher.FoundCanonicalType.getAsString();
   }
 };
@@ -277,15 +267,15 @@ TEST_F(ClangCXXCastTest, TestEdgeCases) {
   using namespace edgecases;
   {
     auto res = parse(DerivedToBasePrivateSpecifier);
-    ASSERT_GE(res.first.size(), 1);
-    ASSERT_GE(res.second.size(), 1);
+    ASSERT_GE(res.first.size(), 1ul);
+    ASSERT_GE(res.second.size(), 1ul);
     ASSERT_TRUE(res.first.find(CastKind::CK_DerivedToBase) != res.first.end());
     ASSERT_EQ(res.second[0], CXXCast::CC_CStyleCast);
   }
   {
     auto res = parse(BaseToDerivedPrivateSpecifier);
-    ASSERT_GE(res.first.size(), 1);
-    ASSERT_GE(res.second.size(), 1);
+    ASSERT_GE(res.first.size(), 1ul);
+    ASSERT_GE(res.second.size(), 1ul);
     ASSERT_TRUE(res.first.find(CastKind::CK_BaseToDerived) != res.first.end());
     ASSERT_EQ(res.second[0], CXXCast::CC_CStyleCast);
   }
@@ -302,12 +292,18 @@ TEST_F(ClangQualifierModificationTest, TestConstCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtr, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDoublePtr, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDiffLevelPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddMemberPtrToConst, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstMemberPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDoubleMemberPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDiffLevelMemberPtr, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstRef, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstArr, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtrToArr, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtrToArrOfConstPtrs, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrConstData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrConstData, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstMixedPtrTypes, false);
+
   // remove
   // does not require const cast - implicit
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConst, false);
@@ -319,6 +315,13 @@ TEST_F(ClangQualifierModificationTest, TestConstCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDoublePtr, true);
   // does not - level truncated
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDiffLevelPtr, false);
+
+  // Same as the above 4
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveMemberPtrToConst, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstMemberPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDoubleMemberPtr, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDiffLevelMemberPtr, false);
+
   // does - downcast
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstRef, true);
   // does - downcast
@@ -333,6 +336,8 @@ TEST_F(ClangQualifierModificationTest, TestConstCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrConstData, false);
   // does - similar types going down
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrConstData, true);
+  // does - All pointer-like types are downcasted
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstMixedPtrTypes, true);
 }
 
 TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
@@ -348,6 +353,7 @@ TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatilePtrToArrOfVolatilePtrs, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrVolatileData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrVolatileData, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileMixedPtrTypes, false);
 
   // remove
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatile, false);
@@ -362,6 +368,7 @@ TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrVolatileData, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrVolatileData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrVolatileData, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileMixedPtrTypes, true);
 }
 
 TEST_F(ClangQualifierModificationTest, TestRestrictCases) {
@@ -374,6 +381,7 @@ TEST_F(ClangQualifierModificationTest, TestRestrictCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictPtrToArrOfRestrictPtrs, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrRestrictData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrRestrictData, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictMixedPtrTypes, false);
 
   // remove
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictPtr, false);
@@ -385,6 +393,7 @@ TEST_F(ClangQualifierModificationTest, TestRestrictCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrRestrictData, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrRestrictData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrRestrictData, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictMixedPtrTypes, true);
   // TODO: for member function pointers you can actually change the qualifier
   // for it and in order to do so you use reinterpret_cast WITHOUT
   // const_cast to remove the qualifiers... WTF?
