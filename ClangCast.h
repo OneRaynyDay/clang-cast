@@ -44,40 +44,55 @@ namespace cppcast {
 ///
 /// CC_NoOpCast
 /// -----------
-/// This is a cast from a type to itself. The cast can be omitted.
+/// This is either a cast to itself or an implicit conversion that
+/// can be done without casting.
 ///
 /// CC_ConstCast
 /// ------------
 /// int x = 1;
 /// const int& y = x;
 /// const_cast<int&>(y);
-/// A conversion from the same time but with different qualifiers.
+/// A conversion from the same type but with different qualifiers on the
+/// multilevel pointer-array structure.
 ///
 /// CC_StaticCast
 /// -------------
 /// static_cast<int>(true);
-/// Static cast can perform implicit conversions between types,
+/// Static cast can perform logical conversions between types,
 /// call explicitly defined conversion functions such as operator(),
 /// and cast up and down an inheritance hierarchy (given access),
 /// and more.
 ///
+/// CC_ReinterpretCast
+/// ------------------
+/// int* x;
+/// (bool*) x;
+/// The above is a bitcast, and is generally the theme of reinterpret cast.
+/// We reinterpret the bits of the data type into something else. This cast
+/// will only cast A to B if sizeof(A) <= sizeof(B). Out of all the C++ casts,
+/// this is the most "rule-breaking" and dangerous, and should be used
+/// very sparingly.
+///
 /// CC_CStyleCast
 /// -------------
-/// (bool) 0;
+/// template <typename T>
+/// void foo() {
+///     (T) 0;
+/// }
 /// There are some cases where none of the above casts are possible,
 /// or suitable for replacement for C-style casts, such as when
 /// static_cast cannot cast DerivedToBase due to insufficient access,
-/// or C-style casting templated types (which can be any of the casts
+/// or C-style casting dependent (template) types (which can be any type
 /// enumerated above, including the DerivedToBase case). It is generally
 /// good to convert all C-style casts to something of lower power, but
-/// sometimes it's not possible.
+/// sometimes it's not possible without losing power.
 ///
 /// CC_InvalidCast
 /// --------------
 /// This maps to the set of CastKind::CK_* that are not possible to
 /// generate in C++. If this enum is encountered, something is wrong.
 ///
-/// Please refer to getCastType and castHelper for more information.
+/// Please refer to getCastType and requireConstCast for more information.
 enum CXXCast : std::uint8_t {
   CC_DynamicCast,
   CC_NoOpCast,
@@ -205,6 +220,7 @@ bool isFunctionPtr(const QualType& Type) {
 bool recurseDowncastCheck(const QualType& SubExpr,
                           const QualType& CastType,
                           const ASTContext* Context) {
+  // Reused in this context
   bool SubExprPtr = SubExpr->isPointerType();
   bool CastTypePtr = CastType->isPointerType();
   bool SubExprArr = SubExpr->isArrayType();
@@ -234,7 +250,7 @@ bool recurseDowncastCheck(const QualType& SubExpr,
     return false;
 
   // If they are locally similar, we may need to recurse down further.
-  auto stripLayer = [&Context](const QualType& NestedType, bool Ptr, bool Arr, bool MemberPtr) {
+  auto stripLayer = [&Context](const QualType& NestedType, bool Ptr, bool Arr, bool MemberPtr) -> QualType {
     if(Ptr)
       return details::stripPtrLayer(NestedType);
     if(Arr)

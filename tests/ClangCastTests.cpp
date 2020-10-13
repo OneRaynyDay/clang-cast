@@ -260,7 +260,7 @@ TEST_F(ClangCXXCastTest, TestStaticCastTypes) {
 }
 
 TEST_F(ClangCXXCastTest, TestCStyleCastTypes) {
-  // TODO
+  CLANG_CXX_CAST_CHECK_SINGLE_TEST_CASE(Dependent, CStyleCast);
 }
 
 TEST_F(ClangCXXCastTest, TestEdgeCases) {
@@ -282,11 +282,14 @@ TEST_F(ClangCXXCastTest, TestEdgeCases) {
   CLANG_CXX_CAST_CHECK_SINGLE_TEST_CASE(Dependent, CStyleCast);
 }
 
-/// These tests mean:
-/// Does the C-style cast in <test case> require a const_cast?
+///// These tests mean:
+///// Does the C-style cast in <test case> require a const_cast?
 TEST_F(ClangQualifierModificationTest, TestConstCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualNoOp, false);
   // add
+  // we perform these operations in order to first do a sanity check that
+  // 1. const cast isn't needed for upcasting
+  // 2. there will be no segmentation faults before we run the removal tests
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConst, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddPtrToConst, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtr, false);
@@ -303,8 +306,12 @@ TEST_F(ClangQualifierModificationTest, TestConstCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrConstData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrConstData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstMixedPtrTypes, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstUnknownArrPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstUnknownArrPtrToKnownArrPtr, false);
 
   // remove
+  // we perform these operations in order to check the positive cases, along
+  // with negative edge cases.
   // does not require const cast - implicit
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConst, false);
   // does require const cast, base type downcast
@@ -338,6 +345,10 @@ TEST_F(ClangQualifierModificationTest, TestConstCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrConstData, true);
   // does - All pointer-like types are downcasted
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstMixedPtrTypes, true);
+  // does - Unknown size array is similar to unknown size array
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstUnknownArrPtr, true);
+  // does - Unknown size array is similar to known size array
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstUnknownArrPtrToKnownArrPtr, true);
 }
 
 TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
@@ -354,6 +365,8 @@ TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrVolatileData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrVolatileData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileMixedPtrTypes, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileUnknownArrPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileUnknownArrPtrToKnownArrPtr, false);
 
   // remove
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatile, false);
@@ -369,6 +382,8 @@ TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrVolatileData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrVolatileData, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileMixedPtrTypes, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileUnknownArrPtr, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileUnknownArrPtrToKnownArrPtr, true);
 }
 
 TEST_F(ClangQualifierModificationTest, TestRestrictCases) {
@@ -382,6 +397,8 @@ TEST_F(ClangQualifierModificationTest, TestRestrictCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrRestrictData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrRestrictData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictMixedPtrTypes, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictUnknownArrPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictUnknownArrPtrToKnownArrPtr, false);
 
   // remove
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictPtr, false);
@@ -394,6 +411,8 @@ TEST_F(ClangQualifierModificationTest, TestRestrictCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrRestrictData, false);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrRestrictData, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictMixedPtrTypes, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictUnknownArrPtr, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictUnknownArrPtrToKnownArrPtr, true);
   // TODO: for member function pointers you can actually change the qualifier
   // for it and in order to do so you use reinterpret_cast WITHOUT
   // const_cast to remove the qualifiers... WTF?

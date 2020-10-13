@@ -115,6 +115,18 @@ void f() {
   (const double * const t::* const (t::* const * const) [2]) a;
 }
 )";
+static const char QualAddConstUnknownArrPtr[] = R"(
+void f() {
+  int* (*x) [] {};
+  (const int* const (*)[]) x;
+}
+)";
+static const char QualAddConstUnknownArrPtrToKnownArrPtr[] = R"(
+void f() {
+  int* (*x) [] {};
+  (const int* const (*)[2]) x;
+}
+)";
 
 /// Removing const MIGHT require const_cast
 static const char QualRemoveConst[] = R"(
@@ -225,6 +237,18 @@ void f() {
   (double * t::* (t::* *) [2]) a;
 }
 )";
+static const char QualRemoveConstUnknownArrPtr[] = R"(
+void f() {
+  const int* const (*x) [] {};
+  (int* (*)[]) x;
+}
+)";
+static const char QualRemoveConstUnknownArrPtrToKnownArrPtr[] = R"(
+void f() {
+  const int* const (*x) [] {};
+  (int* (*)[2]) x;
+}
+)";
 
 /// Volatile
 /// add
@@ -308,6 +332,19 @@ void f() {
   (volatile double * volatile t::* volatile (t::* volatile * volatile) [2]) a;
 }
 )";
+static const char QualAddVolatileUnknownArrPtr[] = R"(
+void f() {
+  int* (*x) [] {};
+  (volatile int* volatile (*)[]) x;
+}
+)";
+static const char QualAddVolatileUnknownArrPtrToKnownArrPtr[] = R"(
+void f() {
+  int* (*x) [] {};
+  (volatile int* volatile (*)[2]) x;
+}
+)";
+
 /// remove
 static const char QualRemoveVolatile[] = R"(
 void f() {
@@ -383,6 +420,18 @@ void f() {
   (double * t::* (t::* *) [2]) a;
 }
 )";
+static const char QualRemoveVolatileUnknownArrPtr[] = R"(
+void f() {
+  volatile int* volatile (*x) [] {};
+  (int* (*)[]) x;
+}
+)";
+static const char QualRemoveVolatileUnknownArrPtrToKnownArrPtr[] = R"(
+void f() {
+  volatile int* volatile (*x) [] {};
+  (int* (*)[2]) x;
+}
+)";
 
 /// Restricted
 /// add
@@ -443,6 +492,18 @@ struct t {};
 void f() {
   double * t::* (t::* *a) [2];
   (double * __restrict t::* __restrict (t::* __restrict * __restrict) [2]) a;
+}
+)";
+static const char QualAddRestrictUnknownArrPtr[] = R"(
+void f() {
+  int* (*x) [] {};
+  (int* __restrict (*)[]) x;
+}
+)";
+static const char QualAddRestrictUnknownArrPtrToKnownArrPtr[] = R"(
+void f() {
+  int* (*x) [] {};
+  (int* __restrict (*)[2]) x;
 }
 )";
 
@@ -506,6 +567,18 @@ struct t {};
 void f() {
   double * __restrict t::* __restrict (t::* __restrict * __restrict a) [2] {};
   (double * t::* (t::* *) [2]) a;
+}
+)";
+static const char QualRemoveRestrictUnknownArrPtr[] = R"(
+void f() {
+  int* __restrict (*x) [] {};
+  (int* (*)[]) x;
+}
+)";
+static const char QualRemoveRestrictUnknownArrPtrToKnownArrPtr[] = R"(
+void f() {
+  int* __restrict (*x) [] {};
+  (int* (*)[2]) x;
 }
 )";
 

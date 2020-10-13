@@ -3,7 +3,8 @@
 
 namespace testcases {
 
-/// Const cast types
+/// NoOp cast types - these are conversions
+/// that can be done implicitly.
 static const char NoOp[] = R"(
 void f() {
   (int&&) 0;
