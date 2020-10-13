@@ -5,6 +5,7 @@ namespace testcases {
 namespace funcptr {
 
 // Out of all of these tests, we should ideally only identify the cases of
+// FreeFunction and MemberFunction.
 
 static const char Scalar[] = R"(
 void f() {
@@ -50,7 +51,7 @@ void f() {
   void (t::* a)(void) const {};
 }
 )";
-} // namespaces funcptr
+} // namespace funcptr
 } // namespace testcases
 
 #endif // LLVM_PROJECT_CLANGFUNCTIONPTRTESTCASES_H

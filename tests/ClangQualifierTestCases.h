@@ -153,6 +153,12 @@ void f() {
   (double (*)[2]) a;
 }
 )";
+static const char QualRemoveSimilarPtrsBeyondArrConstData[] = R"(
+void f() {
+  const double* const (* const a)[2] {};
+  (double* const (* const)[2])(a);
+}
+)";
 
 /// Volatile
 /// add
@@ -221,6 +227,12 @@ static const char QualAddDiffLevelArrPtrVolatileData[] = R"(
 void f() {
   double (*a)[2] {};
   (volatile double* (*)[2]) a;
+}
+)";
+static const char QualRemoveSimilarPtrsBeyondArrVolatileData[] = R"(
+void f() {
+  volatile double* volatile (* volatile a)[2] {};
+  (double* volatile (* volatile)[2])(a);
 }
 )";
 /// remove
@@ -395,7 +407,12 @@ void f() {
   (double (*)[2]) a;
 }
 )";
-
+static const char QualRemoveSimilarPtrsBeyondArrRestrictData[] = R"(
+void f() {
+  double* __restrict * __restrict (* __restrict a)[2] {};
+  (double* * __restrict (* __restrict)[2])(a);
+}
+)";
 } // namespace constcheck
 
 } // namespace testcases

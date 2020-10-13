@@ -104,7 +104,7 @@ public:
     const Expr* SubExpression = CastExpression->getSubExprAsWritten();
     QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
     QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
-    const bool RequireConstCast = requireConstCast(CanonicalSubExpressionType, CanonicalCastType);
+    const bool RequireConstCast = requireConstCast(CanonicalSubExpressionType, CanonicalCastType, Context);
     const CharSourceRange CastRange = CharSourceRange::getTokenRange(
         CastExpression->getLParenLoc(),
         CastExpression->getRParenLoc());

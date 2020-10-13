@@ -1,6 +1,7 @@
 #include "ClangCXXCastTestCases.h"
 #include "ClangQualifierTestCases.h"
 #include "ClangFunctionPtrTestCases.h"
+#include "ClangChangeQualifierTestCases.h"
 #include "ClangCast.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
@@ -34,6 +35,7 @@
 using namespace testcases;
 using namespace testcases::constcheck;
 using namespace testcases::funcptr;
+using namespace testcases::changequal;
 using namespace clang;
 using namespace clang::tooling;
 using namespace clang::ast_matchers;
@@ -79,10 +81,10 @@ struct QualifierChecker : MatchFinder::MatchCallback {
     }
     // TODO: remove after done testing
     CastExpression->dump();
-    const Expr* SubExpression = CastExpression->getSubExprAsWritten();
-    QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
-    QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
-    RequireConstCast = requireConstCast(CanonicalSubExpressionType, CanonicalCastType, Context);
+//    const Expr* SubExpression = CastExpression->getSubExprAsWritten();
+//    QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
+//    QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
+    RequireConstCast = requireConstCast(CastExpression, Context);
   }
 };
 
@@ -197,9 +199,9 @@ protected:
   ChangeQualifierTest() : CStyleCastMatcher(cStyleCastExpr().bind(CastVar)),
                                      DeclMatcher(varDecl().bind(DeclVar)) {}
 
-  bool parse(const StringRef CastCode, const StringRef ReferenceTypeCode) {
+  bool parse(const StringRef CastCode) {
     std::unique_ptr<clang::ASTUnit> CastAst(clang::tooling::buildASTFromCode(CastCode));
-    std::unique_ptr<clang::ASTUnit> TypeAst(clang::tooling::buildASTFromCode(ReferenceTypeCode));
+    std::unique_ptr<clang::ASTUnit> TypeAst(clang::tooling::buildASTFromCode(CastCode));
     QualifierChanger Changer;
     DeclTypeMatcher TypeMatcher;
     {
@@ -209,10 +211,11 @@ protected:
     }
     {
       MatchFinder Finder;
-      Finder.addMatcher(CStyleCastMatcher, &TypeMatcher);
+      Finder.addMatcher(DeclMatcher, &TypeMatcher);
       Finder.matchAST(TypeAst->getASTContext());
     }
-    return Changer.ChangedCanonicalType == TypeMatcher.FoundCanonicalType;
+    llvm::outs() << "QUALIFIERS: " << Changer.ChangedCanonicalType.getAsString() << " vs. " << TypeMatcher.FoundCanonicalType.getAsString() << "\n";
+    return Changer.ChangedCanonicalType.getAsString() == TypeMatcher.FoundCanonicalType.getAsString();
   }
 };
 
@@ -328,6 +331,8 @@ TEST_F(ClangQualifierModificationTest, TestConstCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrConstData, true);
   // does not - level truncated
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrConstData, false);
+  // does - similar types going down
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrConstData, true);
 }
 
 TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
@@ -356,6 +361,7 @@ TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatilePtrToArrOfVolatilePtrs, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrVolatileData, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrVolatileData, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrVolatileData, true);
 }
 
 TEST_F(ClangQualifierModificationTest, TestRestrictCases) {
@@ -378,6 +384,7 @@ TEST_F(ClangQualifierModificationTest, TestRestrictCases) {
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictPtrToArrOfRestrictPtrs, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrRestrictData, true);
   CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrRestrictData, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrRestrictData, true);
   // TODO: for member function pointers you can actually change the qualifier
   // for it and in order to do so you use reinterpret_cast WITHOUT
   // const_cast to remove the qualifiers... WTF?
@@ -392,4 +399,14 @@ TEST_F(ClangFunctionPtrDetectionTest, TestFuncPtrs) {
   CLANG_FUNC_PTR_CHECK_SINGLE_TEST_CASE(ArrOfMemberFunction, false);
   CLANG_FUNC_PTR_CHECK_SINGLE_TEST_CASE(NestedMemberFunction, false);
   CLANG_FUNC_PTR_CHECK_SINGLE_TEST_CASE(MemberFunction, true);
+}
+
+TEST_F(ChangeQualifierTest, TestChangeQualifiers) {
+  ASSERT_TRUE(parse(NoQualifierChange));
+  ASSERT_TRUE(parse(NoQualifierChangeReinterpret));
+  ASSERT_TRUE(parse(ChangeNestedPointers));
+  ASSERT_TRUE(parse(ChangeNestedPointersReinterpret));
+  ASSERT_TRUE(parse(ChangeNestedPointersUntilArray));
+  ASSERT_TRUE(parse(ChangeNestedPointersUntilArrayReinterpret));
+  ASSERT_TRUE(parse(DontChangeMemberFuncPtr));
 }

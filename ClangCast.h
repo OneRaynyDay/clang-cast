@@ -138,7 +138,6 @@ CXXCast getBaseDerivedCast(const CXXRecordDecl* Base, const CXXRecordDecl* Deriv
     return CXXCast::CC_StaticCast;
 }
 
-
 /// A helper function for getCastKindFromCStyleCast, which
 /// determines the least power of cast required by recursing
 /// CastExpr AST nodes until a non-cast expression has been reached.
@@ -156,8 +155,12 @@ CXXCast castHelper(const Expr* Expression,
   // If it's a cast expression but is not a part of the explicit c-style cast,
   // we've also gone too far.
   const auto* ImplicitCastExpression = dyn_cast<ImplicitCastExpr>(Expression);
-  if (ImplicitCastExpression && !ImplicitCastExpression->isPartOfExplicitCast())
+
+  if (ImplicitCastExpression && !ImplicitCastExpression->isPartOfExplicitCast()) {
+    llvm::outs() << "is not part of explicit cast...\n\n";
+    ImplicitCastExpression->dump();
     return Cast;
+  }
 
   Cast = std::max(Cast, cppcast::getCastType(CastExpression,
                                              CanonicalSubExprType,
@@ -266,6 +269,7 @@ CXXCast castHelper(const Expr* Expression,
 //  return false;
 //}
 
+/// TODO: This needs to work for member pointer as well!
 QualType stripPtrLayer(const QualType &QualifiedType) {
   const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
   return PtrType->getPointeeType();
@@ -294,54 +298,56 @@ bool isFunctionPtr(const QualType& Type) {
 /// nested function pointers, they have the same qualifiers.
 bool recurseDowncastCheck(const QualType& SubExpr,
                           const QualType& CastType,
-                          const ASTContext* Context,
-                          bool& Skip) {
-  if (Skip) {
-    Skip = false;
-  }
-  else if (SubExpr.isMoreQualifiedThan(CastType)) {
-    return true;
-  }
+                          const ASTContext* Context) {
+  llvm::outs() << "ehm..." << SubExpr.getAsString() << " and " << CastType.getAsString() << "...\n\n\n";
+  llvm::outs() << "qualifiers? : " << SubExpr.getLocalFastQualifiers() << " vs. " << CastType.getLocalFastQualifiers() << "\n";
 
   bool SubExprPtr = SubExpr->isPointerType();
   bool CastTypePtr = CastType->isPointerType();
   bool SubExprArr = SubExpr->isArrayType();
   bool CastTypeArr = CastType->isArrayType();
+  bool SubExprMemberPtr = SubExpr->isMemberPointerType();
+  bool CastTypeMemberPtr = CastType->isMemberPointerType();
 
-  llvm::outs() << "ehm..." << SubExpr.getAsString() << " and " << CastType.getAsString() << "..." << SubExprPtr << " " << CastTypePtr << " " << SubExprArr << " " << CastTypeArr << "\n\n\n";
-  llvm::outs() << "qualifiers? : " << SubExpr.getLocalFastQualifiers() << " vs. " << CastType.getLocalFastQualifiers() << "\n";
-
-  // Special edge case: clang treats arrays as a layer over the original type.
-  // we simply peel over the array layer and return whatever's underneath.
-  // NOTE: this disregards Skip, which is ok as well (since it would skip the array layer which can't have qualifiers)
-  if(SubExprArr || CastTypeArr) {
-    // if either can't be descended further (is not array or pointer), then false for no downcast occurred.
-    if((!SubExprPtr && !SubExprArr) || (!CastTypePtr && !CastTypeArr))
-      return false;
-    // if they both can be descended, then cast them down 1 level and do a comparison.
-    QualType SubExprStripped = SubExprPtr ? details::stripPtrLayer(SubExpr) : details::stripArrLayer(SubExpr, Context);
-    QualType CastTypeStripped = CastTypePtr ? details::stripPtrLayer(CastType) : details::stripArrLayer(CastType, Context);
-    llvm::outs() << "hmm... " << SubExprStripped.getAsString() << " vs. " << CastTypeStripped.getAsString() << "\n\n";
-    llvm::outs() << "qualifiers? : " << SubExprStripped.getLocalFastQualifiers() << " vs. " << CastTypeStripped.getLocalFastQualifiers() << "\n";
-    return SubExprStripped.isMoreQualifiedThan(CastTypeStripped);
+  if (SubExpr.isMoreQualifiedThan(CastType)) {
+    return true;
   }
+
+  /// The types A and B are locally similar if
+  /// - pointer, i.e. `int*` is a pointer to an `int`.
+  /// - member pointer, i.e. given `struct t{};`, `int t::* const ptr` is a pointer to an `int` member of struct `t`.
+  /// - array / array of unknown bound, i.e. `int a[2]` and `int a[]`, where the latter is likely a partial `extern` type.
+  /// - both are of same terminal type.
+  bool LocallySimilar = (SubExprMemberPtr && CastTypeMemberPtr) ||
+      (SubExprPtr && CastTypePtr && !SubExprMemberPtr && !CastTypeMemberPtr) ||
+      (SubExprArr && CastTypeArr);
+
+  llvm::outs() << "are we locally similar here?" << LocallySimilar << "\n";
+  if (!LocallySimilar)
+    return false;
+
+  bool IsTerminal = !(SubExprPtr || SubExprArr || SubExprMemberPtr) && !(CastTypePtr || CastTypeArr || CastTypeMemberPtr);
+  llvm::outs() << "What about terminal?" << IsTerminal << "\n";
+  // If we've reached a terminal type then we should also exit.
+  if (IsTerminal)
+    return false;
+
+  // If they are locally similar, we may need to recurse down further.
+  QualType SubExprStripped = SubExprArr ? details::stripArrLayer(SubExpr, Context) : details::stripPtrLayer(SubExpr);
+  QualType CastTypeStripped = CastTypeArr ? details::stripArrLayer(CastType, Context) : details::stripPtrLayer(CastType);
 
   // Continue recursing for pointer types
-  if(SubExprPtr && CastTypePtr) {
-    return recurseDowncastCheck(details::stripPtrLayer(SubExpr), details::stripPtrLayer(CastType), Context, Skip);
-  }
-  return false;
+  return recurseDowncastCheck(SubExprStripped, CastTypeStripped, Context);
 }
 
 } // namespace details
 
 // TODO: Add tests for templates - how do we tell if templates are pointer types/ref types?
-bool requireConstCast(QualType CanonicalSubExprType,
-                      QualType CanonicalCastType,
+bool requireConstCast(const CStyleCastExpr* CastExpression,
                       const ASTContext* Context) {
-  // Implicit conversion can perform the first qualifier cast without
-  // a const_cast.
-  bool SkipFirstQualifiers = true;
+  // We use the implicitly convertible type if possible
+  QualType CanonicalSubExprType = CastExpression->getSubExpr()->getType().getCanonicalType();
+  QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
 
   // Case 0 - We just cannot cast function pointers at the very beginning, regardless of whether it's being downcasted or not.
   if(details::isFunctionPtr(CanonicalCastType) || details::isFunctionPtr(CanonicalSubExprType)) {
@@ -362,7 +368,7 @@ bool requireConstCast(QualType CanonicalSubExprType,
   // Case 2, 3 - pointer type & POD type
   // if the pointer qualifiers are downcasted at any level, then fail.
   // if the POD qualifiers are downcasted, then fail.
-  return details::recurseDowncastCheck(CanonicalSubExprType, CanonicalCastType, Context, SkipFirstQualifiers);
+  return details::recurseDowncastCheck(CanonicalSubExprType, CanonicalCastType, Context);
 }
 
 /// Main function for determining CXX cast type.
