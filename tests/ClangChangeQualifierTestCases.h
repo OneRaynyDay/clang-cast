@@ -71,6 +71,16 @@ void f() {
 }
 )";
 
+static const char ChangeNestedPointersUntilMemberVsNot[] = R"(
+struct t{};
+void f() {
+    const int* const t::* const t::* const p {};
+    (int** t::*) p;
+    // Expected type
+    int* const* const t::* const x {};
+}
+)";
+
 } // namespace changequal
 } // namespace testcases
 

@@ -322,12 +322,10 @@ bool recurseDowncastCheck(const QualType& SubExpr,
       (SubExprPtr && CastTypePtr && !SubExprMemberPtr && !CastTypeMemberPtr) ||
       (SubExprArr && CastTypeArr);
 
-  llvm::outs() << "are we locally similar here?" << LocallySimilar << "\n";
   if (!LocallySimilar)
     return false;
 
   bool IsTerminal = !(SubExprPtr || SubExprArr || SubExprMemberPtr) && !(CastTypePtr || CastTypeArr || CastTypeMemberPtr);
-  llvm::outs() << "What about terminal?" << IsTerminal << "\n";
   // If we've reached a terminal type then we should also exit.
   if (IsTerminal)
     return false;
