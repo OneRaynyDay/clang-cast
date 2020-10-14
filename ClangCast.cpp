@@ -24,7 +24,10 @@ using namespace clang;
 using namespace cppcast;
 using namespace llvm;
 
+namespace clang {
+
 namespace cli {
+
 static llvm::cl::OptionCategory ClangCastCategory("clang-cast options");
 
 llvm::cl::extrahelp ClangCastCategoryHelp(R"(
@@ -89,7 +92,8 @@ private:
 
 } // namespace rewriter
 
-class CStyleCastReplacer : public MatchFinder::MatchCallback {
+namespace cppcast {
+class Replacer : public MatchFinder::MatchCallback {
   using RewriterPtr = std::unique_ptr<clang::FixItRewriter>;
   rewriter::FixItRewriterOptions FixItOptions;
   bool Modify;
@@ -108,9 +112,9 @@ class CStyleCastReplacer : public MatchFinder::MatchCallback {
 
 public:
   // We can't initialize the RewriterPtr until we get an ASTContext.
-  CStyleCastReplacer(bool Modify, const std::string& Filename) : FixItOptions(Filename), Modify(Modify) {}
+  Replacer(bool Modify, const std::string& Filename) : FixItOptions(Filename), Modify(Modify) {}
 
-  virtual ~CStyleCastReplacer() {
+  virtual ~Replacer() {
   }
 
   CharSourceRange getRangeForExpression(const Expr* Expression,
@@ -269,7 +273,7 @@ public:
   }
 
 private:
-  CStyleCastReplacer Handler;
+  Replacer Handler;
   clang::ast_matchers::MatchFinder MatchFinder;
 };
 
@@ -293,14 +297,15 @@ struct ToolFactory : public clang::tooling::FrontendActionFactory {
   }
 };
 
+} // namespace cppcast
+
+} // namespace clang
 
 int main(int argc, const char **argv) {
   // parse the command-line args passed to your code
   tooling::CommonOptionsParser op(argc, argv, cli::ClangCastCategory);
   // create a new Clang Tool instance (a LibTooling environment)
   tooling::ClangTool Tool(op.getCompilations(), op.getSourcePathList());
-
-  std::vector<std::unique_ptr<ASTUnit>> ASTs;
 
 //  int Status = Tool.buildASTs(ASTs);
 //  int ASTStatus = 0;
@@ -320,6 +325,6 @@ int main(int argc, const char **argv) {
 //  MatchFinder Finder;
 //  Finder.addMatcher(CStyleCastMatcher, &Replacer);
 //  auto Factory = tooling::newFrontendActionFactory(&Finder);
-  int ExitCode = Tool.run(new ToolFactory());
+  int ExitCode = Tool.run(new clang::cppcast::ToolFactory());
   return ExitCode;
 }
