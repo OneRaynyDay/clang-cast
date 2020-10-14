@@ -147,10 +147,12 @@ public:
     QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
     QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
 
+    const auto& LangOpts = Context->getLangOpts();
+
     std::string SubExpressionStr = Lexer::getSourceText(
                                        getRangeForExpression(SubExpression, Context),
                                        Context->getSourceManager(),
-                                       Context->getLangOpts()).str();
+                                       LangOpts).str();
 
     bool ConstCastRequired = Casts.size() > 1 && Casts[1] == CXXCast::CC_ConstCast;
 
@@ -162,7 +164,7 @@ public:
       }
       // Case 2
       else {
-        return "const_cast<" + CanonicalCastType.getAsString() +
+        return "const_cast<" + CanonicalCastType.getAsString(LangOpts) +
                ">(" + SubExpressionStr + ")";
       }
     }
@@ -172,15 +174,15 @@ public:
                                     : "reinterpret_cast";
       // Case 3,5
       if (!ConstCastRequired) {
-        return CastTypeStr + "<" + CanonicalCastType.getAsString() + ">(" +
+        return CastTypeStr + "<" + CanonicalCastType.getAsString(LangOpts) + ">(" +
                SubExpressionStr + ")";
       }
       // Case 4,6
       else {
         QualType IntermediateType = changeQualifiers(
             CanonicalCastType, CanonicalSubExpressionType, Context);
-        return "const_cast<" + CanonicalCastType.getAsString() + ">(" +
-               CastTypeStr + "<" + IntermediateType.getAsString() + ">(" +
+        return "const_cast<" + CanonicalCastType.getAsString(LangOpts) + ">(" +
+               CastTypeStr + "<" + IntermediateType.getAsString(LangOpts) + ">(" +
                SubExpressionStr + "))";
       }
     }
