@@ -13,8 +13,8 @@
 #define CLANG_CXX_CAST_CHECK_SINGLE_TEST_CASE(cast_kind, cxx_cast)            \
   {                                                                           \
   auto res = parse(cast_kind);                                                \
-  ASSERT_GE(res.first.size(), 1ul);                                             \
-  ASSERT_EQ(res.second.size(), 1ul);                                            \
+  ASSERT_GE(res.first.size(), 1ul);                                           \
+  ASSERT_EQ(res.second.size(), 1ul);                                          \
   ASSERT_TRUE(res.first.find(CastKind::CK_##cast_kind) != res.first.end());   \
   ASSERT_EQ(res.second[0], CXXCast::CC_##cxx_cast);                           \
   }

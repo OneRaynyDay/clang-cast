@@ -8,5 +8,6 @@ target_link_libraries(clang-cast
         PRIVATE
         clangTooling
         clangBasic
+        clangRewriteFrontend
         clangASTMatchers
         )
