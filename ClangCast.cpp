@@ -59,13 +59,11 @@ llvm::cl::opt<std::string> SuffixOption(
 llvm::cl::extrahelp CommonHelp(clang::tooling::CommonOptionsParser::HelpMessage);
 } // namespace cli
 
-StatementMatcher CStyleCastMatcher = cStyleCastExpr().bind("cast");
-
 namespace rewriter {
 
 class FixItRewriterOptions : public clang::FixItOptions {
 public:
-  FixItRewriterOptions(const std::string& RewriteSuffix = {})
+  FixItRewriterOptions(const std::string& RewriteSuffix)
       : RewriteSuffix(RewriteSuffix) {
     if (RewriteSuffix.empty()) {
       llvm::errs() << "Suffix passed in is empty - we are modifying in place.\n";
@@ -95,6 +93,7 @@ class CStyleCastReplacer : public MatchFinder::MatchCallback {
   using RewriterPtr = std::unique_ptr<clang::FixItRewriter>;
   rewriter::FixItRewriterOptions FixItOptions;
   bool Modify;
+  RewriterPtr Rewriter;
 
   RewriterPtr createRewriter(clang::ASTContext* Context) {
     auto Rewriter =
@@ -103,27 +102,30 @@ class CStyleCastReplacer : public MatchFinder::MatchCallback {
                                                Context->getLangOpts(),
                                                &FixItOptions);
 
-    DiagnosticsEngine.setClient(Rewriter.get(), false);
+    Context->getDiagnostics().setClient(Rewriter.get(), false);
     return Rewriter;
   }
 
 public:
+  // We can't initialize the RewriterPtr until we get an ASTContext.
   CStyleCastReplacer(bool Modify, const std::string& Filename) : FixItOptions(Filename), Modify(Modify) {}
 
-  CharSourceRange getRangeForSubExpression(const CStyleCastExpr* CastExpression,
-                                           const ASTContext* Context) {
-    const Expr* SubExpression = CastExpression->getSubExprAsWritten();
+  virtual ~CStyleCastReplacer() {
+  }
+
+  CharSourceRange getRangeForExpression(const Expr* Expression,
+                                        const ASTContext* Context) {
     const ParenExpr* ParenExpression;
-    while ((ParenExpression = dyn_cast<ParenExpr>(SubExpression))) {
-      SubExpression = ParenExpression->getSubExpr();
+    while ((ParenExpression = dyn_cast<ParenExpr>(Expression))) {
+      Expression = ParenExpression->getSubExpr();
     }
-    auto SubExprStart = SubExpression->getBeginLoc();
-    auto SubExprEnd = Lexer::getLocForEndOfToken(
-        SubExpression->getEndLoc(),
+    auto ExprStart = Expression->getBeginLoc();
+    auto ExprEnd = Lexer::getLocForEndOfToken(
+        Expression->getEndLoc(),
         0,
         Context->getSourceManager(),
         Context->getLangOpts());
-    return CharSourceRange::getCharRange(SubExprStart, SubExprEnd);
+    return CharSourceRange::getCharRange(ExprStart, ExprEnd);
   }
 
   /// There are a few cases for the replacement string:
@@ -142,7 +144,7 @@ public:
     QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
 
     std::string SubExpressionStr = Lexer::getSourceText(
-                                       getRangeForSubExpression(CastExpression, Context),
+                                       getRangeForExpression(SubExpression, Context),
                                        Context->getSourceManager(),
                                        Context->getLangOpts()).str();
 
@@ -180,6 +182,7 @@ public:
     }
     // This shouldn't happen
     llvm::errs() << "This shouldn't happen.\n";
+    // llvm_unreachable
     return {};
   }
 
@@ -188,44 +191,43 @@ public:
   void reportDiagnostic(const std::vector<CXXCast>& Casts,
                         const CStyleCastExpr* CastExpression,
                         ASTContext* Context) {
+    // Before we report, we create the rewriter if necessary:
+    if (Modify && Rewriter == nullptr) {
+      Rewriter = createRewriter(Context);
+    }
+
     DiagnosticsEngine &DiagEngine = Context->getDiagnostics();
     // Set diagnostics to warning by default, and to INFO for edge cases.
-    std::string DiagMessage = "The C-style cast can be replaced by '%0'";
+    const char DiagMessage[] = "The C-style cast can be replaced by '%0'";
     auto StartingLoc = CastExpression->getExprLoc();
-    assert (!Casts.empty());
+    assert(!Casts.empty());
 
     // Invalid cast or dynamic (this should never happen, and would be a bug)
-    if (Casts[0] == CXXCast::CC_InvalidCast || Casts[0] == CXXCast::CC_DynamicCast) {
-      unsigned ID = DiagEngine.getDiagnosticIDs()->getCustomDiagID(DiagnosticIDs::Error, "clang-casts has encountered an error. Currently does not support the following cast");
+    if (Casts[0] == CXXCast::CC_InvalidCast ||
+        Casts[0] == CXXCast::CC_DynamicCast) {
+      unsigned ID = DiagEngine.getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "clang-casts has encountered an error. Currently does not support the following cast");
       DiagEngine.Report(StartingLoc, ID);
       return;
     }
     if (Casts[0] == CXXCast::CC_CStyleCast) {
-      unsigned ID = DiagEngine.getDiagnosticIDs()->getCustomDiagID(DiagnosticIDs::Remark, "The C-style cast cannot be converted into a C++ style cast. Skipping.");
+      unsigned ID = DiagEngine.getCustomDiagID(
+          DiagnosticsEngine::Remark, "The C-style cast cannot be converted into a C++ style cast. Skipping.");
       DiagEngine.Report(StartingLoc, ID);
       return;
     }
 
-    auto Replacement = replaceExpression(Casts, CastExpression, Context);
+    const auto Replacement = replaceExpression(Casts, CastExpression, Context);
+    const auto CastRange = getRangeForExpression(CastExpression, Context);
+    const auto FixIt =
+        clang::FixItHint::CreateReplacement(CastRange, Replacement);
 
-    const auto FixIt = clang::FixItHint::CreateReplacement(CastExpression->getSourceRange(), Replacement);
+    unsigned ID = DiagEngine.getCustomDiagID(
+        DiagnosticsEngine::Warning, DiagMessage);
 
-    // Before we report, we create the rewriter if necessary:
-    auto Rewriter = Modify ? createRewriter(Context) : nullptr;
-
-    unsigned ID = DiagEngine.getDiagnosticIDs()->getCustomDiagID(
-        DiagnosticIDs::Warning, DiagMessage);
-    auto Builder = DiagEngine.Report(StartingLoc, ID);
-    Builder.AddString(Replacement);
-    // Reports the error at the location of the cast
-    Builder.AddFixItHint(FixIt);
-
-    llvm::outs() << "applying modify: " << Modify << "\n\n\n";
-
-    if (Modify) {
-      bool ModificationResult = Rewriter->WriteFixedFiles();
-      llvm::outs() << "modification result: " << ModificationResult << ".\n";
-    }
+    const DiagnosticBuilder& Builder = DiagEngine.Report(StartingLoc, ID);
+    Builder << Replacement << FixIt;
   }
 
   virtual void run(const MatchFinder::MatchResult& Result) {
@@ -247,8 +249,50 @@ public:
     }
 
     reportDiagnostic(CastOrder, CastExpression, Context);
+
+    if (Modify) {
+      bool ModificationResult = Rewriter->WriteFixedFiles();
+    }
   }
 };
+
+class Consumer : public clang::ASTConsumer {
+public:
+  Consumer() : Handler(cli::ModifyOption, cli::SuffixOption) {
+    using namespace clang::ast_matchers;
+    StatementMatcher CStyleCastMatcher = cStyleCastExpr().bind("cast");
+    MatchFinder.addMatcher(CStyleCastMatcher, &Handler);
+  }
+
+  void HandleTranslationUnit(clang::ASTContext& Context) override {
+    MatchFinder.matchAST(Context);
+  }
+
+private:
+  CStyleCastReplacer Handler;
+  clang::ast_matchers::MatchFinder MatchFinder;
+};
+
+class Action : public clang::ASTFrontendAction {
+public:
+  using ASTConsumerPointer = std::unique_ptr<clang::ASTConsumer>;
+
+  Action() = default;
+
+  ASTConsumerPointer CreateASTConsumer(clang::CompilerInstance& Compiler,
+                                       llvm::StringRef Filename) override {
+    return std::make_unique<Consumer>();
+  }
+};
+
+struct ToolFactory : public clang::tooling::FrontendActionFactory {
+  std::unique_ptr<clang::FrontendAction> create() override {
+    std::unique_ptr<clang::FrontendAction> Ptr;
+    Ptr.reset(new Action());
+    return Ptr;
+  }
+};
+
 
 int main(int argc, const char **argv) {
   // parse the command-line args passed to your code
@@ -258,37 +302,24 @@ int main(int argc, const char **argv) {
 
   std::vector<std::unique_ptr<ASTUnit>> ASTs;
 
-  int Status = Tool.buildASTs(ASTs);
-  int ASTStatus = 0;
-  if (Status == 1) {
-    // Building ASTs failed.
-    return 1;
-  } else if (Status == 2) {
-    ASTStatus |= 1;
-    errs() << "Failed to build AST for some of the files, "
-                 << "results may be incomplete."
-                 << "\n";
-  } else {
-    assert(Status == 0 && "Unexpected status returned");
-  }
-
-  CStyleCastReplacer Replacer(cli::ModifyOption, cli::SuffixOption);
-  MatchFinder Finder;
-  Finder.addMatcher(CStyleCastMatcher, &Replacer);
-  auto Factory = tooling::newFrontendActionFactory(&Finder);
-
-  // Add diagnostics
-  int ExitCode = Tool.run(Factory.get());
-  LangOptions DefaultLangOptions;
-  IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts(new DiagnosticOptions());
-  TextDiagnosticPrinter DiagnosticPrinter(errs(), &*DiagOpts);
-  DiagnosticsEngine Diagnostics(
-      IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs()), &*DiagOpts,
-      &DiagnosticPrinter, false);
-
-  auto &FileMgr = Tool.getFiles();
-  SourceManager Sources(Diagnostics, FileMgr);
-  Rewriter Rewrite(Sources, DefaultLangOptions);
-
+//  int Status = Tool.buildASTs(ASTs);
+//  int ASTStatus = 0;
+//  if (Status == 1) {
+//    // Building ASTs failed.
+//    return 1;
+//  } else if (Status == 2) {
+//    ASTStatus |= 1;
+//    errs() << "Failed to build AST for some of the files, "
+//                 << "results may be incomplete."
+//                 << "\n";
+//  } else {
+//    assert(Status == 0 && "Unexpected status returned");
+//  }
+//
+//  CStyleCastReplacer Replacer(cli::ModifyOption, cli::SuffixOption);
+//  MatchFinder Finder;
+//  Finder.addMatcher(CStyleCastMatcher, &Replacer);
+//  auto Factory = tooling::newFrontendActionFactory(&Finder);
+  int ExitCode = Tool.run(new ToolFactory());
   return ExitCode;
 }
