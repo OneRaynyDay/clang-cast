@@ -186,31 +186,83 @@ CXXCast castHelper(const Expr* Expression,
 
 /// NOTE: This does not strip the member pointer layers. For that,
 /// please use stripMemberPtrLayer
-QualType stripPtrLayer(const QualType &QualifiedType) {
-  const PointerType *PtrType = dyn_cast<PointerType>(QualifiedType);
-  return PtrType->getPointeeType();
+QualType stripPtrLayer(const QualType &T) {
+  const PointerType *PT = dyn_cast<PointerType>(T);
+  return PT->getPointeeType();
 }
 
-QualType stripMemberPtrLayer(const QualType &QualifiedType) {
-  const MemberPointerType *PtrType = dyn_cast<MemberPointerType>(QualifiedType);
-  return PtrType->getPointeeType();
+QualType stripMemberPtrLayer(const QualType &T) {
+  const MemberPointerType *MPT = dyn_cast<MemberPointerType>(T);
+  return MPT->getPointeeType();
+}
+
+const Type* getMemberPtrClass(const QualType& T) {
+  const MemberPointerType *MPT = dyn_cast<MemberPointerType>(T);
+  return MPT->getClass();
 }
 
 /// NOTE: If we don't use ASTContext.getAsArrayType(), we will lose the
 /// qualifiers on the element type.
-QualType stripArrLayer(const QualType &QualifiedType, const ASTContext* Context) {
-  const ArrayType *ArrType = Context->getAsArrayType(QualifiedType);
-  return ArrType->getElementType();
+QualType stripArrLayer(const QualType &T, const ASTContext* Context) {
+  const ArrayType *AT = Context->getAsArrayType(T);
+  return AT->getElementType();
 }
 
-bool isFunctionPtr(const QualType& Type) {
-  return Type->isMemberFunctionPointerType() || Type->isFunctionPointerType();
+QualType stripLayer (const QualType& T, const ASTContext* Context){
+  if(T->isPointerType())
+    return details::stripPtrLayer(T);
+  if(T->isArrayType())
+    return details::stripArrLayer(T, Context);
+  if(T->isMemberPointerType())
+    return details::stripMemberPtrLayer(T);
+  // llvm_unreachable
+  return T;
+}
+
+bool isFunctionPtr(const QualType& T) {
+  return T->isMemberFunctionPointerType() || T->isFunctionPointerType();
+}
+
+/// The types A and B are locally similar if
+/// - pointer, i.e. `int*` is a pointer to an `int`.
+/// - member pointer, i.e. given `struct t{};`, `int t::* const ptr` is a pointer to an `int` member of struct `t`.
+/// - array / array of unknown bound, i.e. `int a[2]` and `int a[]`, where the latter is likely a partial `extern` type.
+/// - both are of same terminal type.
+bool isLocallySimilar(const QualType& A, const QualType& B) {
+  bool AIsPtr = A->isPointerType();
+  bool BIsPtr = B->isPointerType();
+  bool AIsArr = A->isArrayType();
+  bool BIsArr = B->isArrayType();
+  bool AIsMemberPtr = A->isMemberPointerType();
+  bool BIsMemberPtr = B->isMemberPointerType();
+
+  bool LocallySimilar = (AIsMemberPtr && BIsMemberPtr) ||
+                        (AIsPtr && BIsPtr && !AIsMemberPtr && !BIsMemberPtr) ||
+                        (AIsArr && BIsArr);
+
+  return LocallySimilar;
+}
+
+/// Either types are terminal if either one are not pointer-like types that
+/// can be traversed.
+bool isTerminal(const QualType& A, const QualType& B) {
+  bool AIsPtr = A->isPointerType();
+  bool BIsPtr = B->isPointerType();
+  bool AIsArr = A->isArrayType();
+  bool BIsArr = B->isArrayType();
+  bool AIsMemberPtr = A->isMemberPointerType();
+  bool BIsMemberPtr = B->isMemberPointerType();
+
+  bool IsTerminal = !(AIsPtr || AIsArr || AIsMemberPtr) || !(BIsPtr || BIsArr || BIsMemberPtr);
+
+  return IsTerminal;
 }
 
 /// \param SubExpr, a copy of QualType subexpression
 /// \param CastType, a copy of QualType cast type
 /// \param Context, the ASTContext pointer used for auxilliary functions
-/// \param Skip, whether or not to skip a downcast
+/// \param Pedantic, if false, we should follow clang's extensions,
+///                  otherwise follow the standard
 /// \return true if the qualifier is downcasted from the possibly nested ptr or
 ///         pod/array type, false otherwise.
 ///
@@ -219,58 +271,35 @@ bool isFunctionPtr(const QualType& Type) {
 /// nested function pointers, they have the same qualifiers.
 bool recurseDowncastCheck(const QualType& SubExpr,
                           const QualType& CastType,
-                          const ASTContext* Context) {
-  // Reused in this context
-  bool SubExprPtr = SubExpr->isPointerType();
-  bool CastTypePtr = CastType->isPointerType();
-  bool SubExprArr = SubExpr->isArrayType();
-  bool CastTypeArr = CastType->isArrayType();
-  bool SubExprMemberPtr = SubExpr->isMemberPointerType();
-  bool CastTypeMemberPtr = CastType->isMemberPointerType();
-
+                          const ASTContext* Context,
+                          const bool Pedantic) {
   if (SubExpr.isMoreQualifiedThan(CastType)) {
     return true;
   }
 
-  /// The types A and B are locally similar if
-  /// - pointer, i.e. `int*` is a pointer to an `int`.
-  /// - member pointer, i.e. given `struct t{};`, `int t::* const ptr` is a pointer to an `int` member of struct `t`.
-  /// - array / array of unknown bound, i.e. `int a[2]` and `int a[]`, where the latter is likely a partial `extern` type.
-  /// - both are of same terminal type.
-  bool LocallySimilar = (SubExprMemberPtr && CastTypeMemberPtr) ||
-      (SubExprPtr && CastTypePtr && !SubExprMemberPtr && !CastTypeMemberPtr) ||
-      (SubExprArr && CastTypeArr);
-
-  if (!LocallySimilar)
+  // If we follow clang's extensions, then the moment something is not locally similar,
+  // we consider the source and destination types not equal and so we can return
+  // false for any nested levels.
+  if(!details::isLocallySimilar(SubExpr, CastType) && !Pedantic)
     return false;
 
-  bool IsTerminal = !(SubExprPtr || SubExprArr || SubExprMemberPtr) && !(CastTypePtr || CastTypeArr || CastTypeMemberPtr);
-  // If we've reached a terminal type then we should also exit.
-  if (IsTerminal)
+  if(details::isTerminal(SubExpr, CastType))
     return false;
 
-  // If they are locally similar, we may need to recurse down further.
-  auto stripLayer = [&Context](const QualType& NestedType, bool Ptr, bool Arr, bool MemberPtr) -> QualType {
-    if(Ptr)
-      return details::stripPtrLayer(NestedType);
-    if(Arr)
-      return details::stripArrLayer(NestedType, Context);
-    // Implicit: if(MemberPtr)
-    return details::stripMemberPtrLayer(NestedType);
-  };
 
-  QualType SubExprStripped = stripLayer(SubExpr, SubExprPtr, SubExprArr, SubExprMemberPtr);
-  QualType CastTypeStripped = stripLayer(CastType, CastTypePtr, CastTypeArr, CastTypeMemberPtr);
+  QualType SubExprStripped = stripLayer(SubExpr, Context);
+  QualType CastTypeStripped = stripLayer(CastType, Context);
 
   // Continue recursing for pointer types
-  return recurseDowncastCheck(SubExprStripped, CastTypeStripped, Context);
+  return recurseDowncastCheck(SubExprStripped, CastTypeStripped, Context, Pedantic);
 }
 
 } // namespace details
 
 // TODO: Add tests for templates - how do we tell if templates are pointer types/ref types?
 bool requireConstCast(const CStyleCastExpr* CastExpression,
-                      const ASTContext* Context) {
+                      const ASTContext* Context,
+                      const bool Pedantic) {
   // We use the implicitly convertible type if possible
   QualType CanonicalSubExprType = CastExpression->getSubExpr()->getType().getCanonicalType();
   QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
@@ -294,7 +323,7 @@ bool requireConstCast(const CStyleCastExpr* CastExpression,
   // Case 2, 3 - pointer type & POD type
   // if the pointer qualifiers are downcasted at any level, then fail.
   // if the POD qualifiers are downcasted, then fail.
-  return details::recurseDowncastCheck(CanonicalSubExprType, CanonicalCastType, Context);
+  return details::recurseDowncastCheck(CanonicalSubExprType, CanonicalCastType, Context, Pedantic);
 }
 
 /// Main function for determining CXX cast type.
@@ -317,7 +346,18 @@ CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
                              CanonicalCastType);
 }
 
-/// We first perform static/reinterpret casts and then const cast.
+/// This converts From(the cast type) into To(subexpression type)'s qualifiers
+/// to prepare for const_cast.
+///
+/// For example:
+/// const int* const (* const x) [2];
+/// (int***) x;
+///
+/// will yield (int* const* const* const) because const_cast will only modify the
+/// qualifiers where they are both locally similar
+/// (they stop becoming similar at array vs. pointer)
+///
+/// We need this to first perform static/reinterpret casts and then const cast.
 /// In order to do this, we must take the cast type and change its qualifiers
 /// so that it can be performed by static/reinterpret cast first.
 ///
@@ -328,35 +368,79 @@ CXXCast getCastKindFromCStyleCast(const CStyleCastExpr* CastExpression) {
 /// \param To, the SubExpression, which has specific qualifiers on it.
 /// \param Context, ASTContext for helper
 /// \return QualType mirroring From but with qualifiers on To.
-QualType changeQualifiers(QualType From, const QualType To, const ASTContext* Context) {
-  if (From->isPointerType()) {
-    // If it's a function pointer, then we don't change the qualifier and we've
-    // reached the end.
-    if(details::isFunctionPtr(From))
-      return From;
+QualType changeQualifiers(QualType From, const QualType& To, const ASTContext* Context, const bool Pedantic) {
+  // If it's a function pointer, then we don't change the qualifier and we've
+  // reached the end.
+  if(details::isFunctionPtr(From))
+    return From;
 
-    // Recurse down on both
-    if (To->isPointerType()) {
-      QualType StrippedFrom = details::stripPtrLayer(From);
-      QualType StrippedTo = details::stripPtrLayer(To);
-      // modify the nested types
-      From = Context->getPointerType(changeQualifiers(StrippedFrom, StrippedTo, Context));
-    }
+  // We're changing qualifiers because it'd be casting away constness.
+  // If we follow the standard, we could be casting away constness down to the
+  // terminal level.
+  // If we follow clang's extensions, we could be casting away constness until
+  // we've reached a non-similar stage.
+  if ((!details::isLocallySimilar(From, To) && !Pedantic) || details::isTerminal(From, To)) {
+    From.setLocalFastQualifiers(To.getLocalFastQualifiers());
+    return From;
+  }
+
+  // TODO: Clang-cast does not support VLA's yet
+  assert (!From->isVariableArrayType());
+  auto StrippedTo = details::stripLayer(To, Context);
+  auto StrippedFrom = details::stripLayer(From, Context);
+
+  auto Temp = changeQualifiers(StrippedFrom, StrippedTo, Context, Pedantic);
+  // If they are locally similar and non-terminal, we can keep going down
+  if (From->isPointerType()) {
+    // modify the nested types
+    From = Context->getPointerType(Temp);
+  }
+  else if (From->isMemberPointerType()) {
+    const Type* FromClass = details::getMemberPtrClass(From);
+    // modify the nested types
+    From = Context->getMemberPointerType(Temp, FromClass);
+  }
+  else if (From->isConstantArrayType()) {
+    const ConstantArrayType* AT = dyn_cast<ConstantArrayType>(From);
+    // Don't assign yet because we need to change the qualifiers
+    From = Context->getConstantArrayType(Temp,
+                                         AT->getSize(),
+                                         AT->getSizeExpr(),
+                                         AT->getSizeModifier(),
+                                         AT->getIndexTypeCVRQualifiers());
+  }
+  else if (From->isIncompleteArrayType()) {
+    const IncompleteArrayType* IAT = dyn_cast<IncompleteArrayType>(From);
+    From = Context->getIncompleteArrayType(Temp,
+                                           IAT->getSizeModifier(),
+                                           IAT->getIndexTypeCVRQualifiers());
   }
   // Unwrap the references and reconstruct them
-  // but we don't need to strip To here.
+  // but we don't need to strip To here (lvalue-to-rvalue would've already happened)
   else if (From->isLValueReferenceType()) {
-    return Context->getLValueReferenceType(changeQualifiers(From.getNonReferenceType(), To, Context));
+    From = Context->getLValueReferenceType(Temp);
   }
   else if (From->isRValueReferenceType()) {
-    return Context->getRValueReferenceType(changeQualifiers(From.getNonReferenceType(), To, Context));
+    From = Context->getRValueReferenceType(Temp);
   }
-  // This includes all terminal types for const cast, which includes
-  // POD types and arrays, AS WELL as taking care of the pointer terminal case,
-  // where From is still a ptr but To (the subexpression) has reached a terminal
-  // case.
+
   From.setLocalFastQualifiers(To.getLocalFastQualifiers());
   return From;
+}
+
+/// Given a cast type enum of the form CXXCasts::CC_{type}, return the
+/// string representation of that respective type.
+std::string cppCastToString(const CXXCast& Cast){
+  switch (Cast){
+    case CXXCast::CC_ConstCast : return "const_cast";
+    case CXXCast::CC_StaticCast: return "static_cast";
+    case CXXCast::CC_ReinterpretCast: return "reinterpret_cast";
+    case CXXCast::CC_DynamicCast: return "dynamic_cast";
+    default:
+      // we're passing in a non-cpp cast type.
+      // TODO llvm_unreachable
+      return {};
+  }
 }
 
 /// Given a CastExpr, determine from its CastKind and other metadata

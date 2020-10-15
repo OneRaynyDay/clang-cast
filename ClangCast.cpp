@@ -49,14 +49,28 @@ The tool can be used to modify a file in-place or into a new file with an added 
 )");
 
 llvm::cl::opt<bool>
+    PedanticOption("pedantic",
+                 llvm::cl::init(false),
+                 llvm::cl::desc("If true, clang-cast will not assume "
+                                "qualification conversion extensions "
+                                "(this will lead to more false negatives) "
+                                "that clang adds. This is for projects "
+                                "which use the -pedantic flag and have "
+                                "extensions turned off."),
+                 llvm::cl::cat(ClangCastCategory));
+
+llvm::cl::opt<bool>
     ModifyOption("modify",
                   llvm::cl::init(false),
-                  llvm::cl::desc("If true, clang-cast will overwrite or write to a new file (-suffix option) with the casts replaced"),
+                  llvm::cl::desc("If true, clang-cast will overwrite or "
+                                 "write to a new file (-suffix option) "
+                                 "with the casts replaced"),
                   llvm::cl::cat(ClangCastCategory));
 
 llvm::cl::opt<std::string> SuffixOption(
     "suffix",
-    llvm::cl::desc("If suffix is set, changes of a file F will be written to F+suffix"),
+    llvm::cl::desc("If suffix is set, changes of "
+                   "a file F will be written to F+suffix"),
     llvm::cl::cat(ClangCastCategory));
 
 llvm::cl::extrahelp CommonHelp(clang::tooling::CommonOptionsParser::HelpMessage);
@@ -98,6 +112,7 @@ class Replacer : public MatchFinder::MatchCallback {
   rewriter::FixItRewriterOptions FixItOptions;
   bool Modify;
   RewriterPtr Rewriter;
+  bool Pedantic;
 
   RewriterPtr createRewriter(clang::ASTContext* Context) {
     auto Rewriter =
@@ -112,7 +127,11 @@ class Replacer : public MatchFinder::MatchCallback {
 
 public:
   // We can't initialize the RewriterPtr until we get an ASTContext.
-  Replacer(bool Modify, const std::string& Filename) : FixItOptions(Filename), Modify(Modify) {}
+  Replacer(const bool Modify,
+           const std::string& Filename,
+           const bool Pedantic) : FixItOptions(Filename),
+                                  Modify(Modify),
+                                  Pedantic(Pedantic) {}
 
   virtual ~Replacer() {
   }
@@ -164,14 +183,13 @@ public:
       }
       // Case 2
       else {
-        return "const_cast<" + CanonicalCastType.getAsString(LangOpts) +
+        // const<>
+        return cppCastToString(Casts[1]) + "<" + CanonicalCastType.getAsString(LangOpts) +
                ">(" + SubExpressionStr + ")";
       }
     }
     else if (Casts[0] == CXXCast::CC_StaticCast || Casts[0] == CXXCast::CC_ReinterpretCast) {
-      std::string CastTypeStr = Casts[0] == CXXCast::CC_StaticCast
-                                    ? "static_cast"
-                                    : "reinterpret_cast";
+      std::string CastTypeStr = cppCastToString(Casts[0]);
       // Case 3,5
       if (!ConstCastRequired) {
         return CastTypeStr + "<" + CanonicalCastType.getAsString(LangOpts) + ">(" +
@@ -180,8 +198,8 @@ public:
       // Case 4,6
       else {
         QualType IntermediateType = changeQualifiers(
-            CanonicalCastType, CanonicalSubExpressionType, Context);
-        return "const_cast<" + CanonicalCastType.getAsString(LangOpts) + ">(" +
+            CanonicalCastType, CanonicalSubExpressionType, Context, Pedantic);
+        return cppCastToString(Casts[1]) + "<" + CanonicalCastType.getAsString(LangOpts) + ">(" +
                CastTypeStr + "<" + IntermediateType.getAsString(LangOpts) + ">(" +
                SubExpressionStr + "))";
       }
@@ -246,7 +264,7 @@ public:
     // Retrieving top level cast type
     const CXXCast CXXCastType = getCastKindFromCStyleCast(CastExpression);
     // Retrieving const cast requirements
-    const bool RequireConstCast = requireConstCast(CastExpression, Context);
+    const bool RequireConstCast = requireConstCast(CastExpression, Context, Pedantic);
     std::vector<CXXCast> CastOrder;
 
     CastOrder.push_back(CXXCastType);
@@ -264,7 +282,7 @@ public:
 
 class Consumer : public clang::ASTConsumer {
 public:
-  Consumer() : Handler(cli::ModifyOption, cli::SuffixOption) {
+  Consumer() : Handler(cli::ModifyOption, cli::SuffixOption, cli::PedanticOption) {
     using namespace clang::ast_matchers;
     StatementMatcher CStyleCastMatcher = cStyleCastExpr().bind("cast");
     MatchFinder.addMatcher(CStyleCastMatcher, &Handler);

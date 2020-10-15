@@ -19,9 +19,9 @@
   ASSERT_EQ(res.second[0], CXXCast::CC_##cxx_cast);                           \
   }
 
-#define CLANG_QUAL_CHECK_SINGLE_TEST_CASE(test_case, req_const)               \
+#define CLANG_QUAL_CHECK_SINGLE_TEST_CASE(test_case, req_const, pedantic)     \
   {                                                                           \
-  auto res = parse(test_case);                                                \
+  auto res = parse(test_case, pedantic);                                      \
   ASSERT_EQ(res, req_const);                                                  \
   }
 
@@ -93,7 +93,9 @@ class ClangQualifierModificationTest : public ::testing::Test {
 
   struct QualifierChecker : MatchFinder::MatchCallback {
     bool RequireConstCast;
-    QualifierChecker() = default;
+    bool Pedantic;
+
+    QualifierChecker(const bool Pedantic) : Pedantic(Pedantic) {};
 
     virtual void run(const MatchFinder::MatchResult &Result) override {
       ASTContext *Context = Result.Context;
@@ -102,16 +104,16 @@ class ClangQualifierModificationTest : public ::testing::Test {
         llvm::errs() << "This should never happen.\n";
         return;
       }
-      RequireConstCast = requireConstCast(CastExpression, Context);
+      RequireConstCast = requireConstCast(CastExpression, Context, Pedantic);
     }
   };
 
 protected:
   ClangQualifierModificationTest() : CStyleCastMatcher(cStyleCastExpr().bind(CastVar)) {}
 
-  bool parse(const StringRef Code) {
+  bool parse(const StringRef Code, bool Pedantic) {
     std::unique_ptr<clang::ASTUnit> ast(clang::tooling::buildASTFromCode(Code));
-    QualifierChecker Checker;
+    QualifierChecker Checker(Pedantic);
     MatchFinder Finder;
     Finder.addMatcher(CStyleCastMatcher, &Checker);
     Finder.matchAST(ast->getASTContext());
@@ -156,7 +158,8 @@ class ChangeQualifierTest : public ::testing::Test {
 
   struct QualifierChanger : MatchFinder::MatchCallback {
     QualType ChangedCanonicalType;
-    QualifierChanger() = default;
+    bool Pedantic;
+    QualifierChanger(const bool Pedantic) : Pedantic(Pedantic) {}
 
     virtual void run(const MatchFinder::MatchResult &Result) override {
       ASTContext *Context = Result.Context;
@@ -168,7 +171,7 @@ class ChangeQualifierTest : public ::testing::Test {
       const Expr* SubExpression = CastExpression->getSubExprAsWritten();
       QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
       QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
-      ChangedCanonicalType = changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context).getCanonicalType();
+      ChangedCanonicalType = changeQualifiers(CanonicalCastType, CanonicalSubExpressionType, Context, Pedantic).getCanonicalType();
     }
   };
 
@@ -190,10 +193,10 @@ protected:
   ChangeQualifierTest() : CStyleCastMatcher(cStyleCastExpr().bind(CastVar)),
                                      DeclMatcher(varDecl().bind(DeclVar)) {}
 
-  bool parse(const StringRef CastCode) {
+  bool parse(const StringRef CastCode, bool Pedantic) {
     std::unique_ptr<clang::ASTUnit> CastAst(clang::tooling::buildASTFromCode(CastCode));
     std::unique_ptr<clang::ASTUnit> TypeAst(clang::tooling::buildASTFromCode(CastCode));
-    QualifierChanger Changer;
+    QualifierChanger Changer(Pedantic);
     DeclTypeMatcher TypeMatcher;
     {
       MatchFinder Finder;
@@ -205,6 +208,7 @@ protected:
       Finder.addMatcher(DeclMatcher, &TypeMatcher);
       Finder.matchAST(TypeAst->getASTContext());
     }
+    llvm::outs() << "Changed canonical type: " << Changer.ChangedCanonicalType.getAsString() << "\n\n\n";
     return Changer.ChangedCanonicalType.getAsString() == TypeMatcher.FoundCanonicalType.getAsString();
   }
 };
@@ -285,134 +289,134 @@ TEST_F(ClangCXXCastTest, TestEdgeCases) {
 ///// These tests mean:
 ///// Does the C-style cast in <test case> require a const_cast?
 TEST_F(ClangQualifierModificationTest, TestConstCases) {
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualNoOp, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualNoOp, false, false);
   // add
   // we perform these operations in order to first do a sanity check that
   // 1. const cast isn't needed for upcasting
   // 2. there will be no segmentation faults before we run the removal tests
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConst, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddPtrToConst, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDoublePtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDiffLevelPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddMemberPtrToConst, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstMemberPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDoubleMemberPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDiffLevelMemberPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstRef, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstArr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtrToArr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtrToArrOfConstPtrs, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrConstData, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrConstData, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstMixedPtrTypes, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstUnknownArrPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstUnknownArrPtrToKnownArrPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConst, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddPtrToConst, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDoublePtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDiffLevelPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddMemberPtrToConst, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstMemberPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDoubleMemberPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstDiffLevelMemberPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstRef, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstArr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtrToArr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstPtrToArrOfConstPtrs, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrConstData, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrConstData, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstMixedPtrTypes, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstUnknownArrPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddConstUnknownArrPtrToKnownArrPtr, false, false);
 
   // remove
   // we perform these operations in order to check the positive cases, along
   // with negative edge cases.
   // does not require const cast - implicit
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConst, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConst, false, false);
   // does require const cast, base type downcast
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemovePtrToConst, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemovePtrToConst, true, false);
   // does not - implicit
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstPtr, false, false);
   // does - downcast
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDoublePtr, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDoublePtr, true, false);
   // does not - level truncated
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDiffLevelPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDiffLevelPtr, false, false);
 
   // Same as the above 4
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveMemberPtrToConst, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstMemberPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDoubleMemberPtr, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDiffLevelMemberPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveMemberPtrToConst, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstMemberPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDoubleMemberPtr, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstDiffLevelMemberPtr, false, false);
 
   // does - downcast
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstRef, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstRef, true, false);
   // does - downcast
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstArr, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstArr, true, false);
   // does not - implicit
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstPtrToArr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstPtrToArr, false, false);
   // does - downcast
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstPtrToArrOfConstPtrs, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstPtrToArrOfConstPtrs, true, false);
   // does - downcast
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrConstData, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrConstData, true, false);
   // does not - level truncated
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrConstData, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrConstData, false, false);
   // does - similar types going down
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrConstData, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrConstData, true, false);
   // does - All pointer-like types are downcasted
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstMixedPtrTypes, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstMixedPtrTypes, true, false);
   // does - Unknown size array is similar to unknown size array
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstUnknownArrPtr, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstUnknownArrPtr, true, false);
   // does - Unknown size array is similar to known size array
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstUnknownArrPtrToKnownArrPtr, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveConstUnknownArrPtrToKnownArrPtr, true, false);
 }
 
 TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
   // add
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatile, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddPtrToVolatile, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatilePtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileDoublePtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileDiffLevelPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileRef, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileArr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatilePtrToArr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatilePtrToArrOfVolatilePtrs, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrVolatileData, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrVolatileData, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileMixedPtrTypes, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileUnknownArrPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileUnknownArrPtrToKnownArrPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatile, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddPtrToVolatile, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatilePtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileDoublePtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileDiffLevelPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileRef, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileArr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatilePtrToArr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatilePtrToArrOfVolatilePtrs, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrVolatileData, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrVolatileData, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileMixedPtrTypes, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileUnknownArrPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddVolatileUnknownArrPtrToKnownArrPtr, false, false);
 
   // remove
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatile, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemovePtrToVolatile, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatilePtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileDoublePtr, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileDiffLevelPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileRef, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileArr, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatilePtrToArr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatilePtrToArrOfVolatilePtrs, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrVolatileData, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrVolatileData, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrVolatileData, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileMixedPtrTypes, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileUnknownArrPtr, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileUnknownArrPtrToKnownArrPtr, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatile, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemovePtrToVolatile, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatilePtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileDoublePtr, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileDiffLevelPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileRef, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileArr, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatilePtrToArr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatilePtrToArrOfVolatilePtrs, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrVolatileData, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrVolatileData, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrVolatileData, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileMixedPtrTypes, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileUnknownArrPtr, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveVolatileUnknownArrPtrToKnownArrPtr, true, false);
 }
 
 TEST_F(ClangQualifierModificationTest, TestRestrictCases) {
   // add
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictDoublePtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictDiffLevelPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictArr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictPtrToArr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictPtrToArrOfRestrictPtrs, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrRestrictData, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrRestrictData, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictMixedPtrTypes, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictUnknownArrPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictUnknownArrPtrToKnownArrPtr, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictDoublePtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictDiffLevelPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictArr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictPtrToArr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictPtrToArrOfRestrictPtrs, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddArrPtrRestrictData, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddDiffLevelArrPtrRestrictData, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictMixedPtrTypes, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictUnknownArrPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualAddRestrictUnknownArrPtrToKnownArrPtr, false, false);
 
   // remove
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictDoublePtr, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictDiffLevelPtr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictArr, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictPtrToArr, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictPtrToArrOfRestrictPtrs, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrRestrictData, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrRestrictData, false);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrRestrictData, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictMixedPtrTypes, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictUnknownArrPtr, true);
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictUnknownArrPtrToKnownArrPtr, true);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictDoublePtr, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictDiffLevelPtr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictArr, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictPtrToArr, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictPtrToArrOfRestrictPtrs, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveArrPtrRestrictData, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveDiffLevelArrPtrRestrictData, false, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveSimilarPtrsBeyondArrRestrictData, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictMixedPtrTypes, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictUnknownArrPtr, true, false);
+  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualRemoveRestrictUnknownArrPtrToKnownArrPtr, true, false);
   // TODO: for member function pointers you can actually change the qualifier
   // for it and in order to do so you use reinterpret_cast WITHOUT
   // const_cast to remove the qualifiers... WTF?
@@ -430,11 +434,23 @@ TEST_F(ClangFunctionPtrDetectionTest, TestFuncPtrs) {
 }
 
 TEST_F(ChangeQualifierTest, TestChangeQualifiers) {
-  ASSERT_TRUE(parse(NoQualifierChange));
-  ASSERT_TRUE(parse(NoQualifierChangeReinterpret));
-  ASSERT_TRUE(parse(ChangeNestedPointers));
-  ASSERT_TRUE(parse(ChangeNestedPointersReinterpret));
-  ASSERT_TRUE(parse(ChangeNestedPointersUntilArray));
-  ASSERT_TRUE(parse(ChangeNestedPointersUntilArrayReinterpret));
-  ASSERT_TRUE(parse(DontChangeMemberFuncPtr));
+  ASSERT_TRUE(parse(extension::NoQualifierChange, false));
+  ASSERT_TRUE(parse(extension::NoQualifierChangeReinterpret, false));
+  ASSERT_TRUE(parse(extension::ChangeNestedPointers, false));
+  ASSERT_TRUE(parse(extension::ChangeNestedPointersReinterpret, false));
+  ASSERT_TRUE(parse(extension::ChangeNestedPointersUntilArray, false));
+  ASSERT_TRUE(parse(extension::ChangeNestedPointersUntilArrayReinterpret, false));
+  ASSERT_TRUE(parse(extension::NoModificationToMixedPtrTypes, false));
+  ASSERT_TRUE(parse(extension::DontChangeMemberFuncPtr, false));
+  ASSERT_TRUE(parse(extension::ChangeNestedPointersUntilMemberVsNot, false));
+
+  ASSERT_TRUE(parse(pedantic::NoQualifierChange, true));
+  ASSERT_TRUE(parse(pedantic::NoQualifierChangeReinterpret, true));
+  ASSERT_TRUE(parse(pedantic::ChangeNestedPointers, true));
+  ASSERT_TRUE(parse(pedantic::ChangeNestedPointersReinterpret, true));
+  ASSERT_TRUE(parse(pedantic::ChangeNestedPointersUntilArray, true));
+  ASSERT_TRUE(parse(pedantic::ChangeNestedPointersUntilArrayReinterpret, true));
+  ASSERT_TRUE(parse(pedantic::NoModificationToMixedPtrTypes, true));
+  ASSERT_TRUE(parse(pedantic::DontChangeMemberFuncPtr, true));
+  ASSERT_TRUE(parse(pedantic::ChangeNestedPointersUntilMemberVsNot, true));
 }
