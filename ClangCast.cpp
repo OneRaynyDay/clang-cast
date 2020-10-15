@@ -122,6 +122,8 @@ class Replacer : public MatchFinder::MatchCallback {
   bool Pedantic;
   bool ReinterpretError;
 
+  // The Context needs to be modifiable because we need to
+  // call non-const functions on SourceManager
   RewriterPtr createRewriter(clang::ASTContext *Context) {
     auto Rewriter = std::make_unique<clang::FixItRewriter>(
         Context->getDiagnostics(), Context->getSourceManager(),
@@ -139,15 +141,15 @@ public:
         ReinterpretError(ReinterpretError) {}
 
   CharSourceRange getRangeForExpression(const Expr *Expression,
-                                        const ASTContext *Context) {
+                                        const ASTContext &Context) {
     const ParenExpr *ParenExpression;
     while ((ParenExpression = dyn_cast<ParenExpr>(Expression))) {
       Expression = ParenExpression->getSubExpr();
     }
     auto ExprStart = Expression->getBeginLoc();
     auto ExprEnd = Lexer::getLocForEndOfToken(Expression->getEndLoc(), 0,
-                                              Context->getSourceManager(),
-                                              Context->getLangOpts());
+                                              Context.getSourceManager(),
+                                              Context.getLangOpts());
     return CharSourceRange::getCharRange(ExprStart, ExprEnd);
   }
 
@@ -159,26 +161,22 @@ public:
   /// 5. Reinterpret cast
   /// 6. Reinterpret cast + const cast
   /// 7. C style cast (keep the cast as is)
-  std::string replaceExpression(const std::vector<CXXCast> &Casts,
-                                const CStyleCastExpr *CastExpression,
-                                const ASTContext *Context) {
-    const Expr *SubExpression = CastExpression->getSubExprAsWritten();
-    QualType CanonicalSubExpressionType =
-        SubExpression->getType().getCanonicalType();
-    QualType CanonicalCastType =
-        CastExpression->getTypeAsWritten().getCanonicalType();
-
-    const auto &LangOpts = Context->getLangOpts();
+  std::string replaceExpression(const CStyleCastOperation &Op,
+                                CXXCast CXXCastKind) {
+    QualType CastType = Op.getCastType();
+    const Expr &SubExpr = Op.getSubExprAsWritten();
+    const ASTContext &Context = Op.getContext();
+    const auto &LangOpts = Context.getLangOpts();
 
     std::string SubExpressionStr =
-        Lexer::getSourceText(getRangeForExpression(SubExpression, Context),
-                             Context->getSourceManager(), LangOpts)
+        Lexer::getSourceText(getRangeForExpression(&SubExpr, Context),
+                             Context.getSourceManager(), Context.getLangOpts())
             .str();
 
-    bool ConstCastRequired =
-        Casts.size() > 1 && Casts[1] == CXXCast::CC_ConstCast;
+    bool ConstCastRequired = Op.requireConstCast();
 
-    if (Casts[0] == CXXCast::CC_NoOpCast) {
+    switch (CXXCastKind) {
+    case CXXCast::CC_NoOpCast: {
       // Case 1
       if (!ConstCastRequired) {
         // our replacement is simply the subexpression (no cast needed)
@@ -187,53 +185,57 @@ public:
       // Case 2
       else {
         // const<>
-        return cppCastToString(Casts[1]) + "<" +
-               CanonicalCastType.getAsString(LangOpts) + ">(" +
-               SubExpressionStr + ")";
+        return cppCastToString(CXXCast::CC_ConstCast) + "<" +
+               CastType.getAsString(LangOpts) + ">(" + SubExpressionStr + ")";
       }
-    } else if (Casts[0] == CXXCast::CC_StaticCast ||
-               Casts[0] == CXXCast::CC_ReinterpretCast) {
-      std::string CastTypeStr = cppCastToString(Casts[0]);
+    }
+    case CXXCast::CC_StaticCast:
+    case CXXCast::CC_ReinterpretCast: {
+      std::string CastTypeStr = cppCastToString(CXXCastKind);
       // Case 3,5
       if (!ConstCastRequired) {
-        return CastTypeStr + "<" + CanonicalCastType.getAsString(LangOpts) +
-               ">(" + SubExpressionStr + ")";
+        return CastTypeStr + "<" + CastType.getAsString(LangOpts) + ">(" +
+               SubExpressionStr + ")";
       }
       // Case 4,6
       else {
-        QualType IntermediateType = changeQualifiers(
-            CanonicalCastType, CanonicalSubExpressionType, Context, Pedantic);
-        return cppCastToString(Casts[1]) + "<" +
-               CanonicalCastType.getAsString(LangOpts) + ">(" + CastTypeStr +
-               "<" + IntermediateType.getAsString(LangOpts) + ">(" +
+        QualType IntermediateType = Op.changeQualifiers();
+        return cppCastToString(CXXCast::CC_ConstCast) + "<" +
+               CastType.getAsString(LangOpts) + ">(" + CastTypeStr + "<" +
+               IntermediateType.getAsString(LangOpts) + ">(" +
                SubExpressionStr + "))";
       }
     }
-    // This shouldn't happen
-    llvm_unreachable(
-        "The type of cast passed in cannot produce a replacement.");
-    return {};
+    default: {
+      llvm_unreachable(
+          "The type of cast passed in cannot produce a replacement.");
+      return {};
+    }
+    }
   }
 
   /// Given an ordered list of casts, use the ASTContext to report necessary
   /// changes to the cast expression.
-  void reportDiagnostic(const std::vector<CXXCast> &Casts,
-                        const CStyleCastExpr *CastExpression,
-                        ASTContext *Context) {
+  void reportDiagnostic(ASTContext *ModifiableContext,
+                        const CStyleCastOperation &Op) {
+    const ASTContext &Context = Op.getContext();
+    DiagnosticsEngine &DiagEngine = Context.getDiagnostics();
+
     // Before we report, we create the rewriter if necessary:
     if (Modify && Rewriter == nullptr) {
-      Rewriter = createRewriter(Context);
+      Rewriter = createRewriter(ModifiableContext);
     }
 
-    DiagnosticsEngine &DiagEngine = Context->getDiagnostics();
     // Set diagnostics to warning by default, and to INFO for edge cases.
-    const char DiagMessage[] = "The C-style cast can be replaced by '%0'";
-    auto StartingLoc = CastExpression->getExprLoc();
-    assert(!Casts.empty());
+    const char NormalDiagMessage[] = "The C-style cast can be replaced by '%0'";
+    const auto &CastExpr = Op.getCStyleCastExpr();
+    auto StartingLoc = CastExpr.getExprLoc();
+
+    CXXCast CXXCastKind = Op.getCastKindFromCStyleCast();
 
     // Invalid cast or dynamic (this should never happen, and would be a bug)
-    if (Casts[0] == CXXCast::CC_InvalidCast ||
-        Casts[0] == CXXCast::CC_DynamicCast) {
+    if (CXXCastKind == CXXCast::CC_InvalidCast ||
+        CXXCastKind == CXXCast::CC_DynamicCast) {
       unsigned ID = DiagEngine.getCustomDiagID(
           DiagnosticsEngine::Error,
           "clang-casts has encountered an error. Currently does not support "
@@ -241,7 +243,7 @@ public:
       DiagEngine.Report(StartingLoc, ID);
       return;
     }
-    if (Casts[0] == CXXCast::CC_CStyleCast) {
+    if (CXXCastKind == CXXCast::CC_CStyleCast) {
       unsigned ID = DiagEngine.getCustomDiagID(
           DiagnosticsEngine::Remark, "The C-style cast cannot be converted "
                                      "into a C++ style cast. Skipping.");
@@ -249,17 +251,17 @@ public:
       return;
     }
 
-    const auto Replacement = replaceExpression(Casts, CastExpression, Context);
-    const auto CastRange = getRangeForExpression(CastExpression, Context);
+    const auto Replacement = replaceExpression(Op, CXXCastKind);
+    const auto CastRange = getRangeForExpression(&CastExpr, Context);
     const auto FixIt =
         clang::FixItHint::CreateReplacement(CastRange, Replacement);
 
     auto DiagLevel =
-        (Casts[0] == CXXCast::CC_ReinterpretCast && ReinterpretError)
+        (CXXCastKind == CXXCast::CC_ReinterpretCast && ReinterpretError)
             ? DiagnosticsEngine::Error
             : DiagnosticsEngine::Warning;
 
-    unsigned ID = DiagEngine.getCustomDiagID(DiagLevel, DiagMessage);
+    unsigned ID = DiagEngine.getCustomDiagID(DiagLevel, NormalDiagMessage);
 
     const DiagnosticBuilder &Builder = DiagEngine.Report(StartingLoc, ID);
     Builder << Replacement << FixIt;
@@ -270,25 +272,9 @@ public:
     const CStyleCastExpr *CastExpression =
         Result.Nodes.getNodeAs<CStyleCastExpr>("cast");
 
-    if (!CastExpression)
-      return;
-
-    // Retrieving top level cast type
-    const CXXCast CXXCastType = getCastKindFromCStyleCast(CastExpression);
-    std::vector<CXXCast> CastOrder;
-    CastOrder.push_back(CXXCastType);
-
-    // Retrieving const cast requirements if the cast type is proper, otherwise
-    // encountering a dependent type requires more context and requireConstCast
-    // may yield undefined behavior.
-    if ((CXXCastType == CXXCast::CC_NoOpCast ||
-         CXXCastType == CXXCast::CC_StaticCast ||
-         CXXCastType == CXXCast::CC_ReinterpretCast) &&
-        requireConstCast(CastExpression, Context, Pedantic)) {
-      CastOrder.push_back(CXXCast::CC_ConstCast);
-    }
-
-    reportDiagnostic(CastOrder, CastExpression, Context);
+    assert(CastExpression);
+    CStyleCastOperation Op(*CastExpression, *Context, Pedantic);
+    reportDiagnostic(Context, Op);
 
     if (Modify) {
       if (!Rewriter->WriteFixedFiles()) {

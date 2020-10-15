@@ -56,12 +56,12 @@ class ClangCXXCastTest : public ::testing::Test {
     CStyleCastCollector() = default;
 
     virtual void run(const MatchFinder::MatchResult &Result) override {
+      ASTContext *Context = Result.Context;
       const CStyleCastExpr *Expr =
           Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
-      if (!Expr) {
-        llvm::errs() << "This should never happen.\n";
-        return;
-      }
+      assert(Expr && Context);
+      CStyleCastOperation Op(*Expr, *Context, /*Pedantic*/ false);
+
       const CastExpr *GenericCastExpr = dyn_cast<CastExpr>(Expr);
       // traverse the expr tree and set current expr
       // node to GenericCastExpr.
@@ -69,7 +69,8 @@ class ClangCXXCastTest : public ::testing::Test {
         CastKinds.insert(GenericCastExpr->getCastKind());
         GenericCastExpr = dyn_cast<CastExpr>(GenericCastExpr->getSubExpr());
       }
-      Casts.push_back(cppcast::getCastKindFromCStyleCast(Expr));
+
+      Casts.push_back(Op.getCastKindFromCStyleCast());
     }
   };
 
@@ -101,11 +102,10 @@ class ClangQualifierModificationTest : public ::testing::Test {
       ASTContext *Context = Result.Context;
       const CStyleCastExpr *CastExpression =
           Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
-      if (!CastExpression) {
-        llvm::errs() << "This should never happen.\n";
-        return;
-      }
-      RequireConstCast = requireConstCast(CastExpression, Context, Pedantic);
+      assert(CastExpression && Context);
+      CStyleCastOperation Op(*CastExpression, *Context, Pedantic);
+
+      RequireConstCast = Op.requireConstCast();
     }
   };
 
@@ -132,10 +132,7 @@ class ClangFunctionPtrDetectionTest : public ::testing::Test {
 
     virtual void run(const MatchFinder::MatchResult &Result) override {
       const VarDecl *DeclExpr = Result.Nodes.getNodeAs<VarDecl>(DeclVar);
-      if (!DeclExpr) {
-        llvm::errs() << "This should never happen.\n";
-        return;
-      }
+      assert(DeclExpr);
       QualType CanonicalDeclType = DeclExpr->getType().getCanonicalType();
       FoundFunctionPtr = details::isFunctionPtr(CanonicalDeclType);
     }
@@ -167,19 +164,10 @@ class ChangeQualifierTest : public ::testing::Test {
       ASTContext *Context = Result.Context;
       const CStyleCastExpr *CastExpression =
           Result.Nodes.getNodeAs<CStyleCastExpr>(CastVar);
-      if (!CastExpression) {
-        llvm::errs() << "This should never happen.\n";
-        return;
-      }
-      const Expr *SubExpression = CastExpression->getSubExprAsWritten();
-      QualType CanonicalSubExpressionType =
-          SubExpression->getType().getCanonicalType();
-      QualType CanonicalCastType =
-          CastExpression->getTypeAsWritten().getCanonicalType();
-      ChangedCanonicalType =
-          changeQualifiers(CanonicalCastType, CanonicalSubExpressionType,
-                           Context, Pedantic)
-              .getCanonicalType();
+      assert(CastExpression && Context);
+      CStyleCastOperation Op(*CastExpression, *Context, Pedantic);
+
+      ChangedCanonicalType = Op.changeQualifiers().getCanonicalType();
     }
   };
 
@@ -189,10 +177,8 @@ class ChangeQualifierTest : public ::testing::Test {
 
     virtual void run(const MatchFinder::MatchResult &Result) override {
       const VarDecl *DeclExpr = Result.Nodes.getNodeAs<VarDecl>(DeclVar);
-      if (!DeclExpr) {
-        llvm::errs() << "This should never happen.\n";
-        return;
-      }
+      assert(DeclExpr);
+
       FoundCanonicalType = DeclExpr->getType().getCanonicalType();
     }
   };
@@ -219,8 +205,6 @@ protected:
       Finder.addMatcher(DeclMatcher, &TypeMatcher);
       Finder.matchAST(TypeAst->getASTContext());
     }
-    llvm::outs() << "Changed canonical type: "
-                 << Changer.ChangedCanonicalType.getAsString() << "\n\n\n";
     return Changer.ChangedCanonicalType.getAsString() ==
            TypeMatcher.FoundCanonicalType.getAsString();
   }
@@ -301,7 +285,7 @@ TEST_F(ClangCXXCastTest, TestEdgeCases) {
 ///// These tests mean:
 ///// Does the C-style cast in <test case> require a const_cast?
 TEST_F(ClangQualifierModificationTest, TestConstCases) {
-  CLANG_QUAL_CHECK_SINGLE_TEST_CASE(QualNoOp, false, false);
+  CLANG_QUAL_CHECK(QualNoOp, false, false);
   // add
   // we perform these operations in order to first do a sanity check that
   // 1. const cast isn't needed for upcasting
@@ -365,6 +349,47 @@ TEST_F(ClangQualifierModificationTest, TestConstCases) {
   CLANG_QUAL_CHECK(QualRemoveConstUnknownArrPtr, true, false);
   // does - Unknown size array is similar to known size array
   CLANG_QUAL_CHECK(QualRemoveConstUnknownArrPtrToKnownArrPtr, true, false);
+
+  // Checking for pedantic changes
+//  CLANG_QUAL_CHECK(QualNoOp, false, false);
+//  CLANG_QUAL_CHECK(QualAddConst, false, false);
+//  CLANG_QUAL_CHECK(QualAddPtrToConst, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstPtr, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstDoublePtr, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstDiffLevelPtr, false, false);
+//  CLANG_QUAL_CHECK(QualAddMemberPtrToConst, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstMemberPtr, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstDoubleMemberPtr, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstDiffLevelMemberPtr, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstRef, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstArr, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstPtrToArr, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstPtrToArrOfConstPtrs, false, false);
+//  CLANG_QUAL_CHECK(QualAddArrPtrConstData, false, false);
+//  CLANG_QUAL_CHECK(QualAddDiffLevelArrPtrConstData, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstMixedPtrTypes, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstUnknownArrPtr, false, false);
+//  CLANG_QUAL_CHECK(QualAddConstUnknownArrPtrToKnownArrPtr, false, false);
+//
+//  CLANG_QUAL_CHECK(QualRemoveConst, false, false);
+//  CLANG_QUAL_CHECK(QualRemovePtrToConst, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstPtr, false, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstDoublePtr, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstDiffLevelPtr, false, false);
+//  CLANG_QUAL_CHECK(QualRemoveMemberPtrToConst, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstMemberPtr, false, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstDoubleMemberPtr, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstDiffLevelMemberPtr, false, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstRef, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstArr, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstPtrToArr, false, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstPtrToArrOfConstPtrs, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveArrPtrConstData, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveDiffLevelArrPtrConstData, false, false);
+//  CLANG_QUAL_CHECK(QualRemoveSimilarPtrsBeyondArrConstData, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstMixedPtrTypes, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstUnknownArrPtr, true, false);
+//  CLANG_QUAL_CHECK(QualRemoveConstUnknownArrPtrToKnownArrPtr, true, false);
 }
 
 TEST_F(ClangQualifierModificationTest, TestVolatileCases) {
