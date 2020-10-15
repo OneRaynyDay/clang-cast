@@ -49,50 +49,57 @@ The tool can be used to modify a file in-place or into a new file with an added 
 )");
 
 llvm::cl::opt<bool>
-    PedanticOption("pedantic",
-                 llvm::cl::init(false),
-                 llvm::cl::desc("If true, clang-cast will not assume "
-                                "qualification conversion extensions "
-                                "(this will lead to more false negatives) "
-                                "that clang adds. This is for projects "
-                                "which use the -pedantic flag and have "
-                                "extensions turned off."),
+    PedanticOption("pedantic", llvm::cl::init(false),
+                   llvm::cl::desc("If true, clang-cast will not assume "
+                                  "qualification conversion extensions \n"
+                                  "(this will lead to more false negatives) "
+                                  "that clang adds. This is for projects \n"
+                                  "which use the -pedantic flag and have "
+                                  "extensions turned off."),
+                   llvm::cl::cat(ClangCastCategory));
+
+llvm::cl::opt<bool>
+    ModifyOption("modify", llvm::cl::init(false),
+                 llvm::cl::desc("If true, clang-cast will overwrite or "
+                                "write to a new file (-suffix option) \n"
+                                "with the casts replaced."),
                  llvm::cl::cat(ClangCastCategory));
 
 llvm::cl::opt<bool>
-    ModifyOption("modify",
-                  llvm::cl::init(false),
-                  llvm::cl::desc("If true, clang-cast will overwrite or "
-                                 "write to a new file (-suffix option) "
-                                 "with the casts replaced"),
-                  llvm::cl::cat(ClangCastCategory));
+    ReinterpretError("reinterpret-error", llvm::cl::init(false),
+                     llvm::cl::desc("If true, clang-cast will issue an error "
+                                    "for any C-style casts that are \n"
+                                    "performing reinterpret_casts."),
+                     llvm::cl::cat(ClangCastCategory));
 
-llvm::cl::opt<std::string> SuffixOption(
-    "suffix",
-    llvm::cl::desc("If suffix is set, changes of "
-                   "a file F will be written to F+suffix"),
-    llvm::cl::cat(ClangCastCategory));
+llvm::cl::opt<std::string>
+    SuffixOption("suffix",
+                 llvm::cl::desc("If suffix is set, changes of "
+                                "a file F will be written to F+suffix."),
+                 llvm::cl::cat(ClangCastCategory));
 
-llvm::cl::extrahelp CommonHelp(clang::tooling::CommonOptionsParser::HelpMessage);
+llvm::cl::extrahelp
+    CommonHelp(clang::tooling::CommonOptionsParser::HelpMessage);
 } // namespace cli
 
 namespace rewriter {
 
 class FixItRewriterOptions : public clang::FixItOptions {
 public:
-  FixItRewriterOptions(const std::string& RewriteSuffix)
+  FixItRewriterOptions(const std::string &RewriteSuffix)
       : RewriteSuffix(RewriteSuffix) {
     if (RewriteSuffix.empty()) {
-      llvm::errs() << "Suffix passed in is empty - we are modifying in place.\n";
+      llvm::errs()
+          << "Suffix passed in is empty - we are modifying in place.\n";
       InPlace = true;
-    }
-    else {
-      llvm::errs() << "Suffix passed in is " << RewriteSuffix << ". We are not modifying in place.\n";
+    } else {
+      llvm::errs() << "Suffix passed in is " << RewriteSuffix
+                   << ". We are not modifying in place.\n";
       InPlace = false;
     }
   }
 
-  std::string RewriteFilename(const std::string& Filename, int& fd) override {
+  std::string RewriteFilename(const std::string &Filename, int &fd) override {
     // Set fd to -1 to mean that the file descriptor is not yet opened.
     fd = -1;
     const auto NewFilename = Filename + RewriteSuffix;
@@ -113,13 +120,12 @@ class Replacer : public MatchFinder::MatchCallback {
   bool Modify;
   RewriterPtr Rewriter;
   bool Pedantic;
+  bool ReinterpretError;
 
-  RewriterPtr createRewriter(clang::ASTContext* Context) {
-    auto Rewriter =
-        std::make_unique<clang::FixItRewriter>(Context->getDiagnostics(),
-                                               Context->getSourceManager(),
-                                               Context->getLangOpts(),
-                                               &FixItOptions);
+  RewriterPtr createRewriter(clang::ASTContext *Context) {
+    auto Rewriter = std::make_unique<clang::FixItRewriter>(
+        Context->getDiagnostics(), Context->getSourceManager(),
+        Context->getLangOpts(), &FixItOptions);
 
     Context->getDiagnostics().setClient(Rewriter.get(), false);
     return Rewriter;
@@ -127,27 +133,21 @@ class Replacer : public MatchFinder::MatchCallback {
 
 public:
   // We can't initialize the RewriterPtr until we get an ASTContext.
-  Replacer(const bool Modify,
-           const std::string& Filename,
-           const bool Pedantic) : FixItOptions(Filename),
-                                  Modify(Modify),
-                                  Pedantic(Pedantic) {}
+  Replacer(const bool Modify, const std::string &Filename, const bool Pedantic,
+           const bool ReinterpretError)
+      : FixItOptions(Filename), Modify(Modify), Pedantic(Pedantic),
+        ReinterpretError(ReinterpretError) {}
 
-  virtual ~Replacer() {
-  }
-
-  CharSourceRange getRangeForExpression(const Expr* Expression,
-                                        const ASTContext* Context) {
-    const ParenExpr* ParenExpression;
+  CharSourceRange getRangeForExpression(const Expr *Expression,
+                                        const ASTContext *Context) {
+    const ParenExpr *ParenExpression;
     while ((ParenExpression = dyn_cast<ParenExpr>(Expression))) {
       Expression = ParenExpression->getSubExpr();
     }
     auto ExprStart = Expression->getBeginLoc();
-    auto ExprEnd = Lexer::getLocForEndOfToken(
-        Expression->getEndLoc(),
-        0,
-        Context->getSourceManager(),
-        Context->getLangOpts());
+    auto ExprEnd = Lexer::getLocForEndOfToken(Expression->getEndLoc(), 0,
+                                              Context->getSourceManager(),
+                                              Context->getLangOpts());
     return CharSourceRange::getCharRange(ExprStart, ExprEnd);
   }
 
@@ -159,21 +159,24 @@ public:
   /// 5. Reinterpret cast
   /// 6. Reinterpret cast + const cast
   /// 7. C style cast (keep the cast as is)
-  std::string replaceExpression(const std::vector<CXXCast>& Casts,
-                                const CStyleCastExpr* CastExpression,
-                                const ASTContext* Context) {
-    const Expr* SubExpression = CastExpression->getSubExprAsWritten();
-    QualType CanonicalSubExpressionType = SubExpression->getType().getCanonicalType();
-    QualType CanonicalCastType = CastExpression->getTypeAsWritten().getCanonicalType();
+  std::string replaceExpression(const std::vector<CXXCast> &Casts,
+                                const CStyleCastExpr *CastExpression,
+                                const ASTContext *Context) {
+    const Expr *SubExpression = CastExpression->getSubExprAsWritten();
+    QualType CanonicalSubExpressionType =
+        SubExpression->getType().getCanonicalType();
+    QualType CanonicalCastType =
+        CastExpression->getTypeAsWritten().getCanonicalType();
 
-    const auto& LangOpts = Context->getLangOpts();
+    const auto &LangOpts = Context->getLangOpts();
 
-    std::string SubExpressionStr = Lexer::getSourceText(
-                                       getRangeForExpression(SubExpression, Context),
-                                       Context->getSourceManager(),
-                                       LangOpts).str();
+    std::string SubExpressionStr =
+        Lexer::getSourceText(getRangeForExpression(SubExpression, Context),
+                             Context->getSourceManager(), LangOpts)
+            .str();
 
-    bool ConstCastRequired = Casts.size() > 1 && Casts[1] == CXXCast::CC_ConstCast;
+    bool ConstCastRequired =
+        Casts.size() > 1 && Casts[1] == CXXCast::CC_ConstCast;
 
     if (Casts[0] == CXXCast::CC_NoOpCast) {
       // Case 1
@@ -184,37 +187,39 @@ public:
       // Case 2
       else {
         // const<>
-        return cppCastToString(Casts[1]) + "<" + CanonicalCastType.getAsString(LangOpts) +
-               ">(" + SubExpressionStr + ")";
+        return cppCastToString(Casts[1]) + "<" +
+               CanonicalCastType.getAsString(LangOpts) + ">(" +
+               SubExpressionStr + ")";
       }
-    }
-    else if (Casts[0] == CXXCast::CC_StaticCast || Casts[0] == CXXCast::CC_ReinterpretCast) {
+    } else if (Casts[0] == CXXCast::CC_StaticCast ||
+               Casts[0] == CXXCast::CC_ReinterpretCast) {
       std::string CastTypeStr = cppCastToString(Casts[0]);
       // Case 3,5
       if (!ConstCastRequired) {
-        return CastTypeStr + "<" + CanonicalCastType.getAsString(LangOpts) + ">(" +
-               SubExpressionStr + ")";
+        return CastTypeStr + "<" + CanonicalCastType.getAsString(LangOpts) +
+               ">(" + SubExpressionStr + ")";
       }
       // Case 4,6
       else {
         QualType IntermediateType = changeQualifiers(
             CanonicalCastType, CanonicalSubExpressionType, Context, Pedantic);
-        return cppCastToString(Casts[1]) + "<" + CanonicalCastType.getAsString(LangOpts) + ">(" +
-               CastTypeStr + "<" + IntermediateType.getAsString(LangOpts) + ">(" +
+        return cppCastToString(Casts[1]) + "<" +
+               CanonicalCastType.getAsString(LangOpts) + ">(" + CastTypeStr +
+               "<" + IntermediateType.getAsString(LangOpts) + ">(" +
                SubExpressionStr + "))";
       }
     }
     // This shouldn't happen
-    llvm::errs() << "This shouldn't happen.\n";
-    // llvm_unreachable
+    llvm_unreachable(
+        "The type of cast passed in cannot produce a replacement.");
     return {};
   }
 
   /// Given an ordered list of casts, use the ASTContext to report necessary
   /// changes to the cast expression.
-  void reportDiagnostic(const std::vector<CXXCast>& Casts,
-                        const CStyleCastExpr* CastExpression,
-                        ASTContext* Context) {
+  void reportDiagnostic(const std::vector<CXXCast> &Casts,
+                        const CStyleCastExpr *CastExpression,
+                        ASTContext *Context) {
     // Before we report, we create the rewriter if necessary:
     if (Modify && Rewriter == nullptr) {
       Rewriter = createRewriter(Context);
@@ -231,13 +236,15 @@ public:
         Casts[0] == CXXCast::CC_DynamicCast) {
       unsigned ID = DiagEngine.getCustomDiagID(
           DiagnosticsEngine::Error,
-          "clang-casts has encountered an error. Currently does not support the following cast");
+          "clang-casts has encountered an error. Currently does not support "
+          "the following cast");
       DiagEngine.Report(StartingLoc, ID);
       return;
     }
     if (Casts[0] == CXXCast::CC_CStyleCast) {
       unsigned ID = DiagEngine.getCustomDiagID(
-          DiagnosticsEngine::Remark, "The C-style cast cannot be converted into a C++ style cast. Skipping.");
+          DiagnosticsEngine::Remark, "The C-style cast cannot be converted "
+                                     "into a C++ style cast. Skipping.");
       DiagEngine.Report(StartingLoc, ID);
       return;
     }
@@ -247,48 +254,61 @@ public:
     const auto FixIt =
         clang::FixItHint::CreateReplacement(CastRange, Replacement);
 
-    unsigned ID = DiagEngine.getCustomDiagID(
-        DiagnosticsEngine::Warning, DiagMessage);
+    auto DiagLevel =
+        (Casts[0] == CXXCast::CC_ReinterpretCast && ReinterpretError)
+            ? DiagnosticsEngine::Error
+            : DiagnosticsEngine::Warning;
 
-    const DiagnosticBuilder& Builder = DiagEngine.Report(StartingLoc, ID);
+    unsigned ID = DiagEngine.getCustomDiagID(DiagLevel, DiagMessage);
+
+    const DiagnosticBuilder &Builder = DiagEngine.Report(StartingLoc, ID);
     Builder << Replacement << FixIt;
   }
 
-  virtual void run(const MatchFinder::MatchResult& Result) {
+  virtual void run(const MatchFinder::MatchResult &Result) {
     ASTContext *Context = Result.Context;
-    const CStyleCastExpr* CastExpression = Result.Nodes.getNodeAs<CStyleCastExpr>("cast");
+    const CStyleCastExpr *CastExpression =
+        Result.Nodes.getNodeAs<CStyleCastExpr>("cast");
 
     if (!CastExpression)
       return;
 
     // Retrieving top level cast type
     const CXXCast CXXCastType = getCastKindFromCStyleCast(CastExpression);
-    // Retrieving const cast requirements
-    const bool RequireConstCast = requireConstCast(CastExpression, Context, Pedantic);
     std::vector<CXXCast> CastOrder;
-
     CastOrder.push_back(CXXCastType);
-    if (RequireConstCast) {
+
+    // Retrieving const cast requirements if the cast type is proper, otherwise
+    // encountering a dependent type requires more context and requireConstCast
+    // may yield undefined behavior.
+    if ((CXXCastType == CXXCast::CC_NoOpCast ||
+         CXXCastType == CXXCast::CC_StaticCast ||
+         CXXCastType == CXXCast::CC_ReinterpretCast) &&
+        requireConstCast(CastExpression, Context, Pedantic)) {
       CastOrder.push_back(CXXCast::CC_ConstCast);
     }
 
     reportDiagnostic(CastOrder, CastExpression, Context);
 
     if (Modify) {
-      bool ModificationResult = Rewriter->WriteFixedFiles();
+      if (!Rewriter->WriteFixedFiles()) {
+        llvm::errs() << "Writing the FixItHint was unsuccessful.\n";
+      }
     }
   }
 };
 
 class Consumer : public clang::ASTConsumer {
 public:
-  Consumer() : Handler(cli::ModifyOption, cli::SuffixOption, cli::PedanticOption) {
+  Consumer()
+      : Handler(cli::ModifyOption, cli::SuffixOption, cli::PedanticOption,
+                cli::ReinterpretError) {
     using namespace clang::ast_matchers;
     StatementMatcher CStyleCastMatcher = cStyleCastExpr().bind("cast");
     MatchFinder.addMatcher(CStyleCastMatcher, &Handler);
   }
 
-  void HandleTranslationUnit(clang::ASTContext& Context) override {
+  void HandleTranslationUnit(clang::ASTContext &Context) override {
     MatchFinder.matchAST(Context);
   }
 
@@ -303,7 +323,7 @@ public:
 
   Action() = default;
 
-  ASTConsumerPointer CreateASTConsumer(clang::CompilerInstance& Compiler,
+  ASTConsumerPointer CreateASTConsumer(clang::CompilerInstance &Compiler,
                                        llvm::StringRef Filename) override {
     return std::make_unique<Consumer>();
   }
@@ -322,29 +342,8 @@ struct ToolFactory : public clang::tooling::FrontendActionFactory {
 } // namespace clang
 
 int main(int argc, const char **argv) {
-  // parse the command-line args passed to your code
   tooling::CommonOptionsParser op(argc, argv, cli::ClangCastCategory);
-  // create a new Clang Tool instance (a LibTooling environment)
   tooling::ClangTool Tool(op.getCompilations(), op.getSourcePathList());
-
-//  int Status = Tool.buildASTs(ASTs);
-//  int ASTStatus = 0;
-//  if (Status == 1) {
-//    // Building ASTs failed.
-//    return 1;
-//  } else if (Status == 2) {
-//    ASTStatus |= 1;
-//    errs() << "Failed to build AST for some of the files, "
-//                 << "results may be incomplete."
-//                 << "\n";
-//  } else {
-//    assert(Status == 0 && "Unexpected status returned");
-//  }
-//
-//  CStyleCastReplacer Replacer(cli::ModifyOption, cli::SuffixOption);
-//  MatchFinder Finder;
-//  Finder.addMatcher(CStyleCastMatcher, &Replacer);
-//  auto Factory = tooling::newFrontendActionFactory(&Finder);
   int ExitCode = Tool.run(new clang::cppcast::ToolFactory());
   return ExitCode;
 }
