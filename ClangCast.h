@@ -24,7 +24,7 @@ namespace cppcast {
 /// Enumerations for cast types
 /// The ordering of these enums is important.
 ///
-/// C-style casts in clang are performed incrementally:
+/// C style casts in clang are performed incrementally:
 /// - CStyleCastExpr
 ///   - ImplicitCastExpr
 ///     - ImplicitCastExpr
@@ -40,7 +40,7 @@ namespace cppcast {
 /// dynamic_cast<Base*>(derived_ptr);
 /// A conversion from Base to Derived or vice versa that is
 /// performed at RUNTIME. This is not possible to be expressed
-/// in terms of C-style casts.
+/// in terms of C style casts.
 ///
 /// CC_NoOpCast
 /// -----------
@@ -80,11 +80,11 @@ namespace cppcast {
 ///     (T) 0;
 /// }
 /// There are some cases where none of the above casts are possible,
-/// or suitable for replacement for C-style casts, such as when
+/// or suitable for replacement for C style casts, such as when
 /// static_cast cannot cast DerivedToBase due to insufficient access,
-/// or C-style casting dependent (template) types (which can be any type
+/// or C style casting dependent (template) types (which can be any type
 /// enumerated above, including the DerivedToBase case). It is generally
-/// good to convert all C-style casts to something of lower power, but
+/// good to convert all C style casts to something of lower power, but
 /// sometimes it's not possible without losing power.
 ///
 /// CC_InvalidCast
@@ -93,7 +93,7 @@ namespace cppcast {
 /// generate in C++. If this enum is encountered, something is wrong.
 ///
 /// Please refer to getCastType and requireConstCast for more information.
-enum CXXCast : std::uint8_t {
+enum class CXXCast : std::uint8_t {
   CC_DynamicCast,
   CC_NoOpCast,
   CC_ConstCast,
@@ -313,6 +313,46 @@ public:
   CXXCast getCastKindFromCStyleCast() const { return castHelper(&MainExpr); }
 
 private:
+  void WarnMemberPointerClass(const QualType &SEType,
+                              const QualType &CType) const {
+    // Auxilliary: If the member pointers classes are
+    // not the same, issue a warning.
+    if (SEType->isMemberPointerType() && CType->isMemberPointerType()) {
+      const MemberPointerType *MPSEType = dyn_cast<MemberPointerType>(SEType);
+      const Type *SEClass = MPSEType->getClass();
+
+      const MemberPointerType *MPCType = dyn_cast<MemberPointerType>(CType);
+      const Type *CClass = MPCType->getClass();
+
+      if (SEClass->getCanonicalTypeUnqualified() !=
+          CClass->getCanonicalTypeUnqualified()) {
+        auto &DiagEngine = Context.getDiagnostics();
+        const auto &LangOpts = Context.getLangOpts();
+        unsigned ID = DiagEngine.getCustomDiagID(
+            DiagnosticsEngine::Warning,
+            "C style cast performs a member-to-pointer cast from class %0 to "
+            "%1, which are not equal");
+        DiagEngine.Report(MainExpr.getExprLoc(), ID)
+            << QualType(SEClass, 0) << QualType(CClass, 0);
+      }
+    }
+  }
+
+  void ErrorPedanticVLA(const QualType &T) const {
+    if (!Pedantic)
+      return;
+    // Auxilliary: If the type is variable length arrays (VLA)s, it should raise
+    // warnings under --pedantic
+    if (T->isVariableArrayType()) {
+      auto &DiagEngine = Context.getDiagnostics();
+      const auto &LangOpts = Context.getLangOpts();
+      unsigned ID = DiagEngine.getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "detected variable length array %0 with --pedantic enabled");
+      DiagEngine.Report(MainExpr.getExprLoc(), ID) << T;
+    }
+  }
+
   /// \param SEType, a copy of QualType subexpression
   /// \param CType, a copy of QualType cast type
   /// \param Context, the ASTContext pointer used for auxilliary functions
@@ -337,20 +377,10 @@ private:
     if (!details::isLocallySimilar(SEType, CType) && !Pedantic)
       return false;
 
-    // Auxilliary: If the member pointers classes are
-    // not the same, issue a warning.
-    if (SEType->isMemberPointerType() && CType->isMemberPointerType()) {
-      const MemberPointerType *MPSEType = dyn_cast<MemberPointerType>(SEType);
-      const Type *SEClass = MPSEType->getClass();
-
-      const MemberPointerType *MPCType = dyn_cast<MemberPointerType>(CType);
-      const Type *CClass = MPCType->getClass();
-
-      if (SEClass->getCanonicalTypeUnqualified() !=
-          CClass->getCanonicalTypeUnqualified()) {
-        llvm::errs() << "Warning: class types are not equal.\n";
-      }
-    }
+    // Auxiliary warnings during parsing
+    WarnMemberPointerClass(SEType, CType);
+    ErrorPedanticVLA(SEType);
+    ErrorPedanticVLA(CType);
 
     if (details::isTerminal(SEType, CType))
       return false;
@@ -384,8 +414,6 @@ private:
       return From;
     }
 
-    // TODO: Clang-cast does not support VLA's yet
-    assert(!From->isVariableArrayType());
     auto StrippedTo = details::stripLayer(To, Context);
     auto StrippedFrom = details::stripLayer(From, Context);
 
@@ -409,6 +437,12 @@ private:
       const IncompleteArrayType *IAT = dyn_cast<IncompleteArrayType>(From);
       From = Context.getIncompleteArrayType(Temp, IAT->getSizeModifier(),
                                             IAT->getIndexTypeCVRQualifiers());
+    } else if (From->isVariableArrayType()) {
+      // The following can only work if we're not in --pedantic
+      const VariableArrayType *VAT = dyn_cast<VariableArrayType>(From);
+      Context.getVariableArrayType(
+          Temp, VAT->getSizeExpr(), VAT->getSizeModifier(),
+          VAT->getIndexTypeCVRQualifiers(), VAT->getBracketsRange());
     }
     // Unwrap the references and reconstruct them
     // but we don't need to strip To here (lvalue-to-rvalue would've already
@@ -459,25 +493,25 @@ private:
   /// \return CXXCast corresponding to the type of conversion.
   CXXCast getCastType(const CastExpr *CastExpression) const {
     switch (CastExpression->getCastKind()) {
-      /// No-op cast type
+    /// No-op cast type
     case CastKind::CK_NoOp:
     case CastKind::CK_ArrayToPointerDecay:
     case CastKind::CK_LValueToRValue:
       return CXXCast::CC_NoOpCast;
 
-      /// dynamic cast type
+    /// dynamic cast type
     case CastKind::CK_Dynamic:
       return CXXCast::CC_DynamicCast;
 
-      /// Static cast types
-      // This cannot be expressed in the form of a C-style cast.
+    /// Static cast types
+    // This cannot be expressed in the form of a C style cast.
     case CastKind::CK_UncheckedDerivedToBase:
     case CastKind::CK_DerivedToBase: {
       // Special case:
       // The base class A is inaccessible (private)
       // so we can't static_cast. We can't reinterpret_cast
       // either because reinterpret casting to A* would point
-      // to the data segment owned by Pad. We can't convert to C-style
+      // to the data segment owned by Pad. We can't convert to C style
       // in this case.
       //
       // struct A { int i; };
@@ -506,10 +540,10 @@ private:
     case CastKind::CK_ConstructorConversion:
     case CastKind::CK_PointerToBoolean:
     case CastKind::CK_ToVoid:
-      // vector splats are constant size vectors that can be
-      // broadcast assigned a single value.
+    // vector splats are constant size vectors that can be
+    // broadcast assigned a single value.
     case CastKind::CK_VectorSplat:
-      // Common integral/float cast types
+    // Common integral/float cast types
     case CastKind::CK_IntegralCast:
     case CastKind::CK_IntegralToBoolean:
     case CastKind::CK_IntegralToFloating:
@@ -521,29 +555,29 @@ private:
     case CastKind::CK_FloatingToBoolean:
     case CastKind::CK_BooleanToSignedIntegral:
     case CastKind::CK_FloatingCast:
-      // Floating complex cast types
+    // Floating complex cast types
     case CastKind::CK_FloatingRealToComplex:
     case CastKind::CK_FloatingComplexToReal:
     case CastKind::CK_FloatingComplexToBoolean:
     case CastKind::CK_FloatingComplexCast:
     case CastKind::CK_FloatingComplexToIntegralComplex:
-      // Integral complex cast types
+    // Integral complex cast types
     case CastKind::CK_IntegralRealToComplex:
     case CastKind::CK_IntegralComplexToReal:
     case CastKind::CK_IntegralComplexToBoolean:
     case CastKind::CK_IntegralComplexCast:
     case CastKind::CK_IntegralComplexToFloatingComplex:
-      // Atomic to non-atomic casts
+    // Atomic to non-atomic casts
     case CastKind::CK_AtomicToNonAtomic:
     case CastKind::CK_NonAtomicToAtomic:
-      // OpenCL casts
-      // https://godbolt.org/z/DEz8Rs
+    // OpenCL casts
+    // https://godbolt.org/z/DEz8Rs
     case CastKind::CK_ZeroToOCLOpaqueType:
     case CastKind::CK_AddressSpaceConversion:
     case CastKind::CK_IntToOCLSampler:
       return CXXCast::CC_StaticCast;
 
-      /// Reinterpret cast types
+    /// Reinterpret cast types
     case CastKind::CK_BitCast:
     case CastKind::CK_LValueBitCast:
     case CastKind::CK_IntegralToPointer:
@@ -552,21 +586,21 @@ private:
     case CastKind::CK_PointerToIntegral:
       return CXXCast::CC_ReinterpretCast;
 
-      /// C-style cast types
-      // Dependent types are left as they are.
+    /// C style cast types
+    // Dependent types are left as they are.
     case CastKind::CK_Dependent:
       return CXXCast::CC_CStyleCast;
 
-      // Union casts is not available in C++.
+    // Union casts is not available in C++.
     case CastKind::CK_ToUnion:
-      // Built-in functions must be directly called and don't have
-      // address. This is impossible for C-style casts.
+    // Built-in functions must be directly called and don't have
+    // address. This is impossible for C style casts.
     case CastKind::CK_BuiltinFnToFnPtr:
-      // C++ does not officially support the Objective C extensions.
-      // We mark these as invalid.
-      // Objective C pointer types &
-      // Objective C automatic reference counting (ARC) &
-      // Objective C blocks
+    // C++ does not officially support the Objective C extensions.
+    // We mark these as invalid.
+    // Objective C pointer types &
+    // Objective C automatic reference counting (ARC) &
+    // Objective C blocks
     case CastKind::CK_CPointerToObjCPointerCast:
     case CastKind::CK_BlockPointerToObjCPointerCast:
     case CastKind::CK_AnyPointerToBlockPointerCast:
@@ -592,10 +626,13 @@ std::string cppCastToString(const CXXCast &Cast) {
     return "static_cast";
   case CXXCast::CC_ReinterpretCast:
     return "reinterpret_cast";
-  case CXXCast::CC_DynamicCast:
-    return "dynamic_cast";
+  // Below are only used for summary diagnostics
+  case CXXCast::CC_CStyleCast:
+    return "C style cast";
+  case CXXCast::CC_NoOpCast:
+    return "No-op cast";
   default:
-    llvm_unreachable("The cast is not a C++ cast (CXXNamedCastExpr).");
+    llvm_unreachable("The cast should never occur.");
     return {};
   }
 }

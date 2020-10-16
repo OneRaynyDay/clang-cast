@@ -17,7 +17,9 @@
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
+#include <map>
 
 using namespace clang::ast_matchers;
 using namespace clang;
@@ -28,11 +30,41 @@ namespace clang {
 
 namespace cli {
 
+// We can't make these enum-classes if we want to use the llvm CommandLine.h
+// macros to define lists
+// we also make these masks so we can construct a simple bitmask for testing
+// inclusion.
+enum ErrorOpts {
+  err_static = 0b1,
+  err_reinterpret = 0b10,
+  err_const = 0b100,
+  err_cstyle = 0b1000,
+  err_noop = 0b10000,
+};
+
+unsigned CXXCastToMask(const CXXCast &CXXCastKind) {
+  switch (CXXCastKind) {
+  case CXXCast::CC_StaticCast:
+    return err_static;
+  case CXXCast::CC_ReinterpretCast:
+    return err_reinterpret;
+  case CXXCast::CC_ConstCast:
+    return err_const;
+  case CXXCast::CC_CStyleCast:
+    return err_cstyle;
+  case CXXCast::CC_NoOpCast:
+    return err_noop;
+  default:
+    // no such mask is supplied
+    return 0;
+  }
+}
+
 static llvm::cl::OptionCategory ClangCastCategory("clang-cast options");
 
 llvm::cl::extrahelp ClangCastCategoryHelp(R"(
-clang-cast finds C-style casts and attempts to convert them into C++ casts.
-C++ casts are preferred since they are safer and more explicit than C-style casts.
+clang-cast finds C style casts and attempts to convert them into C++ casts.
+C++ casts are preferred since they are safer and more explicit than C style casts.
 
 For example:
 
@@ -54,8 +86,8 @@ llvm::cl::opt<bool>
                                   "qualification conversion extensions \n"
                                   "(this will lead to more false negatives) "
                                   "that clang adds. This is for projects \n"
-                                  "which use the -pedantic flag and have "
-                                  "extensions turned off."),
+                                  "which use the -pedantic or -pedantic-errors "
+                                  "flag and have extensions turned off."),
                    llvm::cl::cat(ClangCastCategory));
 
 llvm::cl::opt<bool>
@@ -65,18 +97,30 @@ llvm::cl::opt<bool>
                                 "with the casts replaced."),
                  llvm::cl::cat(ClangCastCategory));
 
-llvm::cl::opt<bool>
-    ReinterpretError("reinterpret-error", llvm::cl::init(false),
-                     llvm::cl::desc("If true, clang-cast will issue an error "
-                                    "for any C-style casts that are \n"
-                                    "performing reinterpret_casts."),
-                     llvm::cl::cat(ClangCastCategory));
+llvm::cl::list<ErrorOpts> ErrorOptList(
+    llvm::cl::desc("If any flags are set, clang-cast will issue an "
+                   "error for any C style casts that are converted "
+                   "to the following types."),
+    llvm::cl::values(clEnumVal(err_static, "Error on static_cast"),
+                     clEnumVal(err_reinterpret, "Error on reinterpret_cast"),
+                     clEnumVal(err_const, "Error on const_cast"),
+                     clEnumVal(err_cstyle,
+                               "Error on non-convertible C style casts"),
+                     clEnumVal(err_noop, "Error on unnecessary C style casts")),
+    llvm::cl::cat(ClangCastCategory));
 
 llvm::cl::opt<std::string>
     SuffixOption("suffix",
                  llvm::cl::desc("If suffix is set, changes of "
                                 "a file F will be written to F+suffix."),
                  llvm::cl::cat(ClangCastCategory));
+
+llvm::cl::opt<bool> PublishSummary(
+    "summary", llvm::cl::init(false),
+    llvm::cl::desc("If true, clang-cast gives a small summary "
+                   "of the statistics of casts occurring through "
+                   "the entire translation unit."),
+    llvm::cl::cat(ClangCastCategory));
 
 llvm::cl::extrahelp
     CommonHelp(clang::tooling::CommonOptionsParser::HelpMessage);
@@ -117,10 +161,13 @@ namespace cppcast {
 class Replacer : public MatchFinder::MatchCallback {
   using RewriterPtr = std::unique_ptr<clang::FixItRewriter>;
   rewriter::FixItRewriterOptions FixItOptions;
-  bool Modify;
   RewriterPtr Rewriter;
+  bool Modify;
   bool Pedantic;
-  bool ReinterpretError;
+  unsigned ErrMask;
+  bool PublishSummary;
+  std::map<CXXCast, unsigned> Statistics;
+  unsigned TotalCasts;
 
   // The Context needs to be modifiable because we need to
   // call non-const functions on SourceManager
@@ -136,9 +183,28 @@ class Replacer : public MatchFinder::MatchCallback {
 public:
   // We can't initialize the RewriterPtr until we get an ASTContext.
   Replacer(const bool Modify, const std::string &Filename, const bool Pedantic,
-           const bool ReinterpretError)
+           std::vector<cli::ErrorOpts> ErrorOptions, bool PublishSummary)
       : FixItOptions(Filename), Modify(Modify), Pedantic(Pedantic),
-        ReinterpretError(ReinterpretError) {}
+        /* will modify in constructor */ ErrMask(0),
+        PublishSummary(PublishSummary), TotalCasts(0) {
+    for (unsigned i = 0; i != ErrorOptions.size(); i++) {
+      ErrMask |= ErrorOptions[i];
+    }
+  }
+
+  // TODO: Is this okay to do?
+  virtual ~Replacer() {
+    if (PublishSummary) {
+      for (auto const &[CXXCastKind, Freq] : Statistics) {
+        llvm::errs() << "The type " << cppCastToString(CXXCastKind)
+                     << " has been issued " << Freq
+                     << " times throughout the translation unit.\n";
+      }
+      llvm::errs() << "In total, there are " << TotalCasts
+                   << " C style casts in the translation unit. Multiple C++ "
+                      "casts may be used to convert a single C style cast.\n";
+    }
+  }
 
   CharSourceRange getRangeForExpression(const Expr *Expression,
                                         const ASTContext &Context) {
@@ -162,7 +228,7 @@ public:
   /// 6. Reinterpret cast + const cast
   /// 7. C style cast (keep the cast as is)
   std::string replaceExpression(const CStyleCastOperation &Op,
-                                CXXCast CXXCastKind) {
+                                CXXCast CXXCastKind, bool ConstCastRequired) {
     QualType CastType = Op.getCastType();
     const Expr &SubExpr = Op.getSubExprAsWritten();
     const ASTContext &Context = Op.getContext();
@@ -172,8 +238,6 @@ public:
         Lexer::getSourceText(getRangeForExpression(&SubExpr, Context),
                              Context.getSourceManager(), Context.getLangOpts())
             .str();
-
-    bool ConstCastRequired = Op.requireConstCast();
 
     switch (CXXCastKind) {
     case CXXCast::CC_NoOpCast: {
@@ -218,8 +282,8 @@ public:
   /// changes to the cast expression.
   void reportDiagnostic(ASTContext *ModifiableContext,
                         const CStyleCastOperation &Op) {
-    const ASTContext &Context = Op.getContext();
-    DiagnosticsEngine &DiagEngine = Context.getDiagnostics();
+    const auto &Context = Op.getContext();
+    auto &DiagEngine = Context.getDiagnostics();
 
     // Before we report, we create the rewriter if necessary:
     if (Modify && Rewriter == nullptr) {
@@ -227,7 +291,7 @@ public:
     }
 
     // Set diagnostics to warning by default, and to INFO for edge cases.
-    const char NormalDiagMessage[] = "The C-style cast can be replaced by '%0'";
+    const char NormalDiagMessage[] = "The C style cast can be replaced by '%0'";
     const auto &CastExpr = Op.getCStyleCastExpr();
     auto StartingLoc = CastExpr.getExprLoc();
 
@@ -245,21 +309,34 @@ public:
     }
     if (CXXCastKind == CXXCast::CC_CStyleCast) {
       unsigned ID = DiagEngine.getCustomDiagID(
-          DiagnosticsEngine::Remark, "The C-style cast cannot be converted "
-                                     "into a C++ style cast. Skipping.");
+          cli::CXXCastToMask(CXXCastKind) & ErrMask ? DiagnosticsEngine::Error
+                                                    : DiagnosticsEngine::Remark,
+          "The C style cast cannot be converted "
+          "into a C++ style cast. Skipping.");
       DiagEngine.Report(StartingLoc, ID);
       return;
     }
 
-    const auto Replacement = replaceExpression(Op, CXXCastKind);
+    bool ConstCastRequired = Op.requireConstCast();
+    const auto Replacement =
+        replaceExpression(Op, CXXCastKind, ConstCastRequired);
     const auto CastRange = getRangeForExpression(&CastExpr, Context);
     const auto FixIt =
         clang::FixItHint::CreateReplacement(CastRange, Replacement);
 
-    auto DiagLevel =
-        (CXXCastKind == CXXCast::CC_ReinterpretCast && ReinterpretError)
-            ? DiagnosticsEngine::Error
-            : DiagnosticsEngine::Warning;
+    // Constructing bitmask
+    unsigned CurMask = cli::CXXCastToMask(CXXCastKind);
+    if (ConstCastRequired) {
+      CurMask |= cli::CXXCastToMask(CXXCast::CC_ConstCast);
+    }
+
+    // Adding to statistics
+    if (ConstCastRequired)
+      Statistics[CXXCast::CC_ConstCast]++;
+    Statistics[CXXCastKind]++;
+
+    auto DiagLevel = (CurMask & ErrMask) ? DiagnosticsEngine::Error
+                                         : DiagnosticsEngine::Warning;
 
     unsigned ID = DiagEngine.getCustomDiagID(DiagLevel, NormalDiagMessage);
 
@@ -288,7 +365,7 @@ class Consumer : public clang::ASTConsumer {
 public:
   Consumer()
       : Handler(cli::ModifyOption, cli::SuffixOption, cli::PedanticOption,
-                cli::ReinterpretError) {
+                cli::ErrorOptList, cli::PublishSummary) {
     using namespace clang::ast_matchers;
     StatementMatcher CStyleCastMatcher = cStyleCastExpr().bind("cast");
     MatchFinder.addMatcher(CStyleCastMatcher, &Handler);
