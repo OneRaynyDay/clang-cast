@@ -354,8 +354,8 @@ public:
     reportDiagnostic(Context, Op);
 
     if (Modify) {
-      if (!Rewriter->WriteFixedFiles()) {
-        llvm::errs() << "Writing the FixItHint was unsuccessful.\n";
+      if (Rewriter->WriteFixedFiles()) {
+        llvm::errs() << "ERROR: Writing the FixItHint was unsuccessful.\n";
       }
     }
   }
