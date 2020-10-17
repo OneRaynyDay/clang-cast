@@ -78,6 +78,7 @@ reinterpret_cast<int*>(p);
 
 When running clang-cast on a compilation unit, the tool will emit useful diagnostics.
 The tool can be used to modify a file in-place or into a new file with an added suffix.
+Clang-cast will not modify system headers, nor any file with the suffix .c (C files).
 )");
 
 llvm::cl::opt<bool>
@@ -115,6 +116,11 @@ llvm::cl::opt<std::string>
                                 "a file F will be written to F+suffix."),
                  llvm::cl::cat(ClangCastCategory));
 
+llvm::cl::opt<bool>
+    DontExpandIncludes("no-includes",
+                       llvm::cl::desc("Don't modify any include files."),
+                       llvm::cl::cat(ClangCastCategory));
+
 llvm::cl::opt<bool> PublishSummary(
     "summary", llvm::cl::init(false),
     llvm::cl::desc("If true, clang-cast gives a small summary "
@@ -133,12 +139,8 @@ public:
   FixItRewriterOptions(const std::string &RewriteSuffix)
       : RewriteSuffix(RewriteSuffix) {
     if (RewriteSuffix.empty()) {
-      llvm::errs()
-          << "Suffix passed in is empty - we are modifying in place.\n";
       InPlace = true;
     } else {
-      llvm::errs() << "Suffix passed in is " << RewriteSuffix
-                   << ". We are not modifying in place.\n";
       InPlace = false;
     }
   }
@@ -167,7 +169,9 @@ class Replacer : public MatchFinder::MatchCallback {
   unsigned ErrMask;
   bool PublishSummary;
   std::map<CXXCast, unsigned> Statistics;
+  std::set<StringRef> ChangedFiles;
   unsigned TotalCasts;
+  bool DontExpandIncludes;
 
   // The Context needs to be modifiable because we need to
   // call non-const functions on SourceManager
@@ -183,7 +187,7 @@ class Replacer : public MatchFinder::MatchCallback {
 public:
   // We can't initialize the RewriterPtr until we get an ASTContext.
   Replacer(const bool Modify, const std::string &Filename, const bool Pedantic,
-           std::vector<cli::ErrorOpts> ErrorOptions, bool PublishSummary)
+           std::vector<cli::ErrorOpts> ErrorOptions, bool PublishSummary, bool DontExpandIncludes)
       : FixItOptions(Filename), Modify(Modify), Pedantic(Pedantic),
         /* will modify in constructor */ ErrMask(0),
         PublishSummary(PublishSummary), TotalCasts(0) {
@@ -199,6 +203,12 @@ public:
         llvm::errs() << "The type " << cppCastToString(CXXCastKind)
                      << " has been issued " << Freq
                      << " times throughout the translation unit.\n";
+      }
+      if (Modify) {
+        llvm::errs() << "The following files were modified:\n";
+        for (auto const &File : ChangedFiles) {
+          llvm::errs() << "\t - " << File << "\n";
+        }
       }
       llvm::errs() << "In total, there are " << TotalCasts
                    << " C style casts in the translation unit. Multiple C++ "
@@ -324,15 +334,12 @@ public:
     const auto FixIt =
         clang::FixItHint::CreateReplacement(CastRange, Replacement);
 
-    // Constructing bitmask
+    // Constructing bitmask and adding statistics
     unsigned CurMask = cli::CXXCastToMask(CXXCastKind);
     if (ConstCastRequired) {
       CurMask |= cli::CXXCastToMask(CXXCast::CC_ConstCast);
-    }
-
-    // Adding to statistics
-    if (ConstCastRequired)
       Statistics[CXXCast::CC_ConstCast]++;
+    }
     Statistics[CXXCastKind]++;
 
     auto DiagLevel = (CurMask & ErrMask) ? DiagnosticsEngine::Error
@@ -346,14 +353,38 @@ public:
 
   virtual void run(const MatchFinder::MatchResult &Result) {
     ASTContext *Context = Result.Context;
+    auto &DiagEngine = Context->getDiagnostics();
     const CStyleCastExpr *CastExpression =
         Result.Nodes.getNodeAs<CStyleCastExpr>("cast");
-
     assert(CastExpression);
+
+    const auto &Manager = Context->getSourceManager();
+    const auto Loc = CastExpression->getBeginLoc();
+    // We skip external headers
+    if (Manager.isInExternCSystemHeader(Loc) || Manager.isInSystemHeader(Loc)) {
+      return;
+    }
+    if (!Manager.isInMainFile(Loc) && DontExpandIncludes) {
+      return;
+    }
+
+    TotalCasts++;
     CStyleCastOperation Op(*CastExpression, *Context, Pedantic);
     reportDiagnostic(Context, Op);
 
     if (Modify) {
+      // Checking for symlinks
+      const FileEntry *Entry =
+          Manager.getFileEntryForID(Manager.getFileID(Loc));
+      const auto RealFilename = Entry->tryGetRealPathName();
+      const auto Filename = Entry->getName();
+      ChangedFiles.insert(Filename);
+      if (RealFilename != Filename) {
+        unsigned ID = DiagEngine.getCustomDiagID(
+            DiagnosticsEngine::Warning, "The symlink at %0 pointing to %1 is changed to a file during modifications.");
+        DiagEngine.Report(ID) << Filename << RealFilename;
+      }
+
       if (Rewriter->WriteFixedFiles()) {
         llvm::errs() << "ERROR: Writing the FixItHint was unsuccessful.\n";
       }
@@ -363,9 +394,19 @@ public:
 
 class Consumer : public clang::ASTConsumer {
 public:
-  Consumer()
+  Consumer(StringRef Filename)
       : Handler(cli::ModifyOption, cli::SuffixOption, cli::PedanticOption,
                 cli::ErrorOptList, cli::PublishSummary) {
+    // For those who use a hybrid of C and C++ files, we don't want to modify
+    // any source that may potentially involve C.
+    // TODO WARNING: Header files shared between C and C++ files cannot be
+    // determined easily by passing in AST's of translation units individually.
+    if (Filename.endswith(".c")) {
+      llvm::errs() << "File " << Filename
+                   << " is detected to be a C file. Skipping.\n";
+      return;
+    }
+
     using namespace clang::ast_matchers;
     StatementMatcher CStyleCastMatcher = cStyleCastExpr().bind("cast");
     MatchFinder.addMatcher(CStyleCastMatcher, &Handler);
@@ -386,9 +427,9 @@ public:
 
   Action() = default;
 
-  ASTConsumerPointer CreateASTConsumer(clang::CompilerInstance &Compiler,
-                                       llvm::StringRef Filename) override {
-    return std::make_unique<Consumer>();
+  ASTConsumerPointer CreateASTConsumer(CompilerInstance &Compiler,
+                                       StringRef Filename) override {
+    return std::make_unique<Consumer>(Filename);
   }
 };
 
@@ -406,6 +447,15 @@ struct ToolFactory : public clang::tooling::FrontendActionFactory {
 
 int main(int argc, const char **argv) {
   tooling::CommonOptionsParser op(argc, argv, cli::ClangCastCategory);
+  const auto &CompDatabase = op.getCompilations();
+  const auto Files = CompDatabase.getAllFiles();
+
+  //  llvm::errs() << "reading in files: \n";
+  //  for (auto& s : Files) {
+  //    llvm::errs() << s << ", ";
+  //  }
+  //  llvm::errs() << "\n";
+
   tooling::ClangTool Tool(op.getCompilations(), op.getSourcePathList());
   int ExitCode = Tool.run(new clang::cppcast::ToolFactory());
   return ExitCode;
