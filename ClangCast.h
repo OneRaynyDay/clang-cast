@@ -212,6 +212,45 @@ bool isTerminal(const QualType &A, const QualType &B) {
 
 } // namespace details
 
+template <unsigned N, typename... Args>
+DiagnosticBuilder reportWithLoc(DiagnosticsEngine &Engine,
+                   const DiagnosticsEngine::Level &Level,
+                   const char (&FormatString)[N], const SourceLocation &Loc,
+                   Args &&... args) {
+  unsigned ID = Engine.getCustomDiagID(Level, FormatString);
+  // Binary left fold
+  return (Engine.Report(Loc, ID) << ... << std::forward<Args>(args));
+}
+
+template <unsigned N, typename... Args>
+DiagnosticBuilder report(DiagnosticsEngine &Engine, DiagnosticsEngine::Level Level,
+            const char (&FormatString)[N], Args &&... args) {
+  unsigned ID = Engine.getCustomDiagID(Level, FormatString);
+  // Binary left fold
+  return (Engine.Report(ID) << ... << std::forward<Args &&>(args));
+}
+
+/// Given a cast type enum of the form CXXCasts::CC_{type}, return the
+/// string representation of that respective type.
+std::string cppCastToString(const CXXCast &Cast) {
+  switch (Cast) {
+  case CXXCast::CC_ConstCast:
+    return "const_cast";
+  case CXXCast::CC_StaticCast:
+    return "static_cast";
+  case CXXCast::CC_ReinterpretCast:
+    return "reinterpret_cast";
+    // Below are only used for summary diagnostics
+  case CXXCast::CC_CStyleCast:
+    return "C style cast";
+  case CXXCast::CC_NoOpCast:
+    return "No-op cast";
+  default:
+    llvm_unreachable("The cast should never occur.");
+    return {};
+  }
+}
+
 // This class only exists while the Context is still alive
 class CStyleCastOperation {
   const CStyleCastExpr &MainExpr;
@@ -326,14 +365,11 @@ private:
 
       if (SEClass->getCanonicalTypeUnqualified() !=
           CClass->getCanonicalTypeUnqualified()) {
-        auto &DiagEngine = Context.getDiagnostics();
-        const auto &LangOpts = Context.getLangOpts();
-        unsigned ID = DiagEngine.getCustomDiagID(
-            DiagnosticsEngine::Warning,
+        reportWithLoc(
+            Context.getDiagnostics(), DiagnosticsEngine::Warning,
             "C style cast performs a member-to-pointer cast from class %0 to "
-            "%1, which are not equal");
-        DiagEngine.Report(MainExpr.getExprLoc(), ID)
-            << QualType(SEClass, 0) << QualType(CClass, 0);
+            "%1, which are not equal",
+            MainExpr.getExprLoc(), QualType(SEClass, 0), QualType(CClass, 0));
       }
     }
   }
@@ -344,12 +380,9 @@ private:
     // Auxilliary: If the type is variable length arrays (VLA)s, it should raise
     // warnings under --pedantic
     if (T->isVariableArrayType()) {
-      auto &DiagEngine = Context.getDiagnostics();
-      const auto &LangOpts = Context.getLangOpts();
-      unsigned ID = DiagEngine.getCustomDiagID(
-          DiagnosticsEngine::Error,
-          "detected variable length array %0 with --pedantic enabled");
-      DiagEngine.Report(MainExpr.getExprLoc(), ID) << T;
+      reportWithLoc(Context.getDiagnostics(), DiagnosticsEngine::Error,
+                    "detected variable length array %0 with --pedantic enabled",
+                    MainExpr.getExprLoc(), T);
     }
   }
 
@@ -615,27 +648,6 @@ private:
     }
   }
 };
-
-/// Given a cast type enum of the form CXXCasts::CC_{type}, return the
-/// string representation of that respective type.
-std::string cppCastToString(const CXXCast &Cast) {
-  switch (Cast) {
-  case CXXCast::CC_ConstCast:
-    return "const_cast";
-  case CXXCast::CC_StaticCast:
-    return "static_cast";
-  case CXXCast::CC_ReinterpretCast:
-    return "reinterpret_cast";
-  // Below are only used for summary diagnostics
-  case CXXCast::CC_CStyleCast:
-    return "C style cast";
-  case CXXCast::CC_NoOpCast:
-    return "No-op cast";
-  default:
-    llvm_unreachable("The cast should never occur.");
-    return {};
-  }
-}
 
 } // namespace cppcast
 } // namespace clang

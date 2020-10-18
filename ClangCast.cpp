@@ -40,9 +40,19 @@ enum ErrorOpts {
   err_const = 0b100,
   err_cstyle = 0b1000,
   err_noop = 0b10000,
+  err_all = 0b11111,
 };
 
-unsigned CXXCastToMask(const CXXCast &CXXCastKind) {
+// NOTE: There is no "fix_cstyle" because we can't fix them.
+enum FixOpts {
+  fix_static = 0b1,
+  fix_reinterpret = 0b10,
+  fix_const = 0b100,
+  fix_noop = 0b1000,
+  fix_all = 0b1111,
+};
+
+unsigned CXXCastToErrMask(const CXXCast &CXXCastKind) {
   switch (CXXCastKind) {
   case CXXCast::CC_StaticCast:
     return err_static;
@@ -54,6 +64,24 @@ unsigned CXXCastToMask(const CXXCast &CXXCastKind) {
     return err_cstyle;
   case CXXCast::CC_NoOpCast:
     return err_noop;
+  default:
+    // no such mask is supplied
+    return 0;
+  }
+}
+
+// We could be clever and merge with the above function,
+// but it's better to write safer code.
+unsigned CXXCastToFixMask(const CXXCast &CXXCastKind) {
+  switch (CXXCastKind) {
+  case CXXCast::CC_StaticCast:
+    return fix_static;
+  case CXXCast::CC_ReinterpretCast:
+    return fix_reinterpret;
+  case CXXCast::CC_ConstCast:
+    return fix_const;
+  case CXXCast::CC_NoOpCast:
+    return fix_noop;
   default:
     // no such mask is supplied
     return 0;
@@ -91,23 +119,33 @@ llvm::cl::opt<bool>
                                   "flag and have extensions turned off."),
                    llvm::cl::cat(ClangCastCategory));
 
-llvm::cl::opt<bool>
-    ModifyOption("modify", llvm::cl::init(false),
-                 llvm::cl::desc("If true, clang-cast will overwrite or "
-                                "write to a new file (-suffix option) \n"
-                                "with the casts replaced."),
-                 llvm::cl::cat(ClangCastCategory));
-
 llvm::cl::list<ErrorOpts> ErrorOptList(
-    llvm::cl::desc("If any flags are set, clang-cast will issue an "
+    llvm::cl::desc("For each flag set, clang-cast will issue an "
                    "error for any C style casts that are converted "
                    "to the following types."),
-    llvm::cl::values(clEnumVal(err_static, "Error on static_cast"),
-                     clEnumVal(err_reinterpret, "Error on reinterpret_cast"),
-                     clEnumVal(err_const, "Error on const_cast"),
-                     clEnumVal(err_cstyle,
-                               "Error on non-convertible C style casts"),
-                     clEnumVal(err_noop, "Error on unnecessary C style casts")),
+    llvm::cl::values(
+        clEnumValN(err_static, "err-static", "Error on static_cast"),
+        clEnumValN(err_reinterpret, "err-reinterpret",
+                   "Error on reinterpret_cast"),
+        clEnumValN(err_const, "err-const", "Error on const_cast"),
+        clEnumValN(err_cstyle, "err-cstyle",
+                   "Error on non-convertible C style casts"),
+        clEnumValN(err_noop, "err-noop", "Error on unnecessary C style casts"),
+        clEnumValN(err_all, "err-all", "Error for all of the above")),
+    llvm::cl::cat(ClangCastCategory));
+
+llvm::cl::list<FixOpts> FixOptList(
+    llvm::cl::desc("For each flag set, clang-cast will apply a fix for the C "
+                   "style casts that can be converted to the following types. "
+                   "Note that for casts that require two consecutive C++ "
+                   "casts, both flags need to be specified (or --fix-all)."),
+    llvm::cl::values(
+        clEnumValN(fix_static, "fix-static", "Apply fixes to static_cast"),
+        clEnumValN(fix_reinterpret, "fix-reinterpret",
+                   "Apply fixes to reinterpret_cast"),
+        clEnumValN(fix_const, "fix-const", "Apply fixes to const_cast"),
+        clEnumValN(fix_noop, "fix-noop", "Apply fixes to no-op cast"),
+        clEnumValN(fix_all, "fix-all", "Apply fixes for all of the above")),
     llvm::cl::cat(ClangCastCategory));
 
 llvm::cl::opt<std::string>
@@ -117,16 +155,16 @@ llvm::cl::opt<std::string>
                  llvm::cl::cat(ClangCastCategory));
 
 llvm::cl::opt<bool>
-    DontExpandIncludes("no-includes",
+    DontExpandIncludes("no-includes", llvm::cl::init(false),
                        llvm::cl::desc("Don't modify any include files."),
                        llvm::cl::cat(ClangCastCategory));
 
-llvm::cl::opt<bool> PublishSummary(
-    "summary", llvm::cl::init(false),
-    llvm::cl::desc("If true, clang-cast gives a small summary "
-                   "of the statistics of casts occurring through "
-                   "the entire translation unit."),
-    llvm::cl::cat(ClangCastCategory));
+llvm::cl::opt<bool>
+    PublishSummary("summary", llvm::cl::init(false),
+                   llvm::cl::desc("If true, clang-cast gives a small summary "
+                                  "of the statistics of casts through "
+                                  "the entire translation unit."),
+                   llvm::cl::cat(ClangCastCategory));
 
 llvm::cl::extrahelp
     CommonHelp(clang::tooling::CommonOptionsParser::HelpMessage);
@@ -161,38 +199,51 @@ private:
 
 namespace cppcast {
 class Replacer : public MatchFinder::MatchCallback {
+  // We switch between these two depending on whether a FixIt
+  // should actually be applied.
   using RewriterPtr = std::unique_ptr<clang::FixItRewriter>;
-  rewriter::FixItRewriterOptions FixItOptions;
   RewriterPtr Rewriter;
-  bool Modify;
+  DiagnosticConsumer* Printer;
+  rewriter::FixItRewriterOptions FixItOptions;
+
   bool Pedantic;
-  unsigned ErrMask;
   bool PublishSummary;
-  std::map<CXXCast, unsigned> Statistics;
-  std::set<StringRef> ChangedFiles;
   unsigned TotalCasts;
   bool DontExpandIncludes;
+  unsigned ErrMask;
+  unsigned FixMask;
+  std::map<CXXCast, unsigned> Statistics;
+  std::set<StringRef> ChangedFiles;
 
   // The Context needs to be modifiable because we need to
   // call non-const functions on SourceManager
-  RewriterPtr createRewriter(clang::ASTContext *Context) {
-    auto Rewriter = std::make_unique<clang::FixItRewriter>(
-        Context->getDiagnostics(), Context->getSourceManager(),
-        Context->getLangOpts(), &FixItOptions);
-
+  void setRewriter(clang::ASTContext *Context) {
+    if (!Rewriter) {
+      Rewriter = std::make_unique<clang::FixItRewriter>(
+          Context->getDiagnostics(), Context->getSourceManager(),
+          Context->getLangOpts(), &FixItOptions);
+    }
+    // If we modify, we don't want the diagnostics engine to own it.
+    // If we don't modify, we want the diagnostics engine to own the original client.
     Context->getDiagnostics().setClient(Rewriter.get(), false);
-    return Rewriter;
   }
 
 public:
   // We can't initialize the RewriterPtr until we get an ASTContext.
-  Replacer(const bool Modify, const std::string &Filename, const bool Pedantic,
-           std::vector<cli::ErrorOpts> ErrorOptions, bool PublishSummary, bool DontExpandIncludes)
-      : FixItOptions(Filename), Modify(Modify), Pedantic(Pedantic),
-        /* will modify in constructor */ ErrMask(0),
-        PublishSummary(PublishSummary), TotalCasts(0) {
+  Replacer(const std::string &Filename, const bool Pedantic,
+           bool PublishSummary, bool DontExpandIncludes,
+           std::vector<cli::ErrorOpts> ErrorOptions,
+           std::vector<cli::FixOpts> FixOptions)
+      : Rewriter(nullptr), FixItOptions(Filename), Pedantic(Pedantic),
+        PublishSummary(PublishSummary), TotalCasts(0),
+        DontExpandIncludes(DontExpandIncludes),
+        /* modify in ctr */ ErrMask(0),
+        /* modify in ctr */ FixMask(0) {
     for (unsigned i = 0; i != ErrorOptions.size(); i++) {
       ErrMask |= ErrorOptions[i];
+    }
+    for (unsigned i = 0; i != FixOptions.size(); i++) {
+      FixMask |= FixOptions[i];
     }
   }
 
@@ -204,7 +255,7 @@ public:
                      << " has been issued " << Freq
                      << " times throughout the translation unit.\n";
       }
-      if (Modify) {
+      if (FixMask) {
         llvm::errs() << "The following files were modified:\n";
         for (auto const &File : ChangedFiles) {
           llvm::errs() << "\t - " << File << "\n";
@@ -218,15 +269,19 @@ public:
 
   CharSourceRange getRangeForExpression(const Expr *Expression,
                                         const ASTContext &Context) {
+    // Also expand on macros:
+    auto &Manager = Context.getSourceManager();
+
     const ParenExpr *ParenExpression;
     while ((ParenExpression = dyn_cast<ParenExpr>(Expression))) {
       Expression = ParenExpression->getSubExpr();
     }
-    auto ExprStart = Expression->getBeginLoc();
-    auto ExprEnd = Lexer::getLocForEndOfToken(Expression->getEndLoc(), 0,
-                                              Context.getSourceManager(),
-                                              Context.getLangOpts());
-    return CharSourceRange::getCharRange(ExprStart, ExprEnd);
+    auto ExprStart = Manager.getSpellingLoc(Expression->getBeginLoc());
+    auto ExprEnd = Lexer::getLocForEndOfToken(
+        Manager.getSpellingLoc(Expression->getEndLoc()), 0,
+        Context.getSourceManager(), Context.getLangOpts());
+
+    return CharSourceRange::getCharRange(SourceRange{ExprStart, ExprEnd});
   }
 
   /// There are a few cases for the replacement string:
@@ -290,70 +345,89 @@ public:
 
   /// Given an ordered list of casts, use the ASTContext to report necessary
   /// changes to the cast expression.
-  void reportDiagnostic(ASTContext *ModifiableContext,
+  bool reportDiagnostic(ASTContext *ModifiableContext,
                         const CStyleCastOperation &Op) {
     const auto &Context = Op.getContext();
     auto &DiagEngine = Context.getDiagnostics();
 
-    // Before we report, we create the rewriter if necessary:
-    if (Modify && Rewriter == nullptr) {
-      Rewriter = createRewriter(ModifiableContext);
-    }
-
     // Set diagnostics to warning by default, and to INFO for edge cases.
-    const char NormalDiagMessage[] = "The C style cast can be replaced by '%0'";
     const auto &CastExpr = Op.getCStyleCastExpr();
     auto StartingLoc = CastExpr.getExprLoc();
+    const auto& ExprRange = getRangeForExpression(&CastExpr, Context);
 
     CXXCast CXXCastKind = Op.getCastKindFromCStyleCast();
 
     // Invalid cast or dynamic (this should never happen, and would be a bug)
     if (CXXCastKind == CXXCast::CC_InvalidCast ||
         CXXCastKind == CXXCast::CC_DynamicCast) {
-      unsigned ID = DiagEngine.getCustomDiagID(
-          DiagnosticsEngine::Error,
+      reportWithLoc(
+          DiagEngine, DiagnosticsEngine::Error,
           "clang-casts has encountered an error. Currently does not support "
-          "the following cast");
-      DiagEngine.Report(StartingLoc, ID);
-      return;
+          "the following cast",
+          StartingLoc, ExprRange);
+      return false;
     }
     if (CXXCastKind == CXXCast::CC_CStyleCast) {
-      unsigned ID = DiagEngine.getCustomDiagID(
-          cli::CXXCastToMask(CXXCastKind) & ErrMask ? DiagnosticsEngine::Error
-                                                    : DiagnosticsEngine::Remark,
-          "The C style cast cannot be converted "
-          "into a C++ style cast. Skipping.");
-      DiagEngine.Report(StartingLoc, ID);
-      return;
+      reportWithLoc(DiagEngine,
+                    cli::CXXCastToErrMask(CXXCastKind) & ErrMask
+                        ? DiagnosticsEngine::Error
+                        : DiagnosticsEngine::Remark,
+                    "C style cast cannot be converted "
+                    "into a C++ style cast",
+                    StartingLoc, ExprRange);
+      return false;
     }
 
     bool ConstCastRequired = Op.requireConstCast();
     const auto Replacement =
         replaceExpression(Op, CXXCastKind, ConstCastRequired);
     const auto CastRange = getRangeForExpression(&CastExpr, Context);
-    const auto FixIt =
-        clang::FixItHint::CreateReplacement(CastRange, Replacement);
 
     // Constructing bitmask and adding statistics
-    unsigned CurMask = cli::CXXCastToMask(CXXCastKind);
+    unsigned CurErrMask = cli::CXXCastToErrMask(CXXCastKind);
+    unsigned CurFixMask = cli::CXXCastToFixMask(CXXCastKind);
     if (ConstCastRequired) {
-      CurMask |= cli::CXXCastToMask(CXXCast::CC_ConstCast);
+      CurErrMask |= cli::CXXCastToErrMask(CXXCast::CC_ConstCast);
+      CurFixMask |= cli::CXXCastToFixMask(CXXCast::CC_ConstCast);
       Statistics[CXXCast::CC_ConstCast]++;
     }
     Statistics[CXXCastKind]++;
 
-    auto DiagLevel = (CurMask & ErrMask) ? DiagnosticsEngine::Error
-                                         : DiagnosticsEngine::Warning;
 
-    unsigned ID = DiagEngine.getCustomDiagID(DiagLevel, NormalDiagMessage);
+    // TODO: the location pointer looks funky when the cast expression is
+    // in a macro.
+    auto &Manager = Context.getSourceManager();
+    auto Level = (CurErrMask & ErrMask) ? DiagnosticsEngine::Error
+                                        : DiagnosticsEngine::Warning;
+    if (Manager.isMacroBodyExpansion(StartingLoc)) {
+      reportWithLoc(DiagEngine, Level,
+                    "C style cast can be replaced by '%0' "
+                    "(won't be fixed in macro)",
+                    StartingLoc, Replacement, ExprRange);
+    } else {
+      // Set the diagnostic consumer accordingly.
+      bool Modify = (CurFixMask & FixMask) == CurFixMask;
+      setRewriter(ModifiableContext);
 
-    const DiagnosticBuilder &Builder = DiagEngine.Report(StartingLoc, ID);
-    Builder << Replacement << FixIt;
+      if(Modify) {
+        const auto FixIt =
+            clang::FixItHint::CreateReplacement(CastRange, Replacement);
+        reportWithLoc(DiagEngine, Level, "C style cast can be replaced by '%0'",
+                      StartingLoc, Replacement, FixIt);
+      }
+      else {
+        reportWithLoc(DiagEngine, Level, "C style cast can be replaced by '%0'",
+                      StartingLoc, Replacement, ExprRange);
+      }
+      return Modify;
+    }
+    return false;
   }
 
   virtual void run(const MatchFinder::MatchResult &Result) {
     ASTContext *Context = Result.Context;
     auto &DiagEngine = Context->getDiagnostics();
+
     const CStyleCastExpr *CastExpression =
         Result.Nodes.getNodeAs<CStyleCastExpr>("cast");
     assert(CastExpression);
@@ -369,24 +443,33 @@ public:
     }
 
     TotalCasts++;
-    CStyleCastOperation Op(*CastExpression, *Context, Pedantic);
-    reportDiagnostic(Context, Op);
 
-    if (Modify) {
+    CStyleCastOperation Op(*CastExpression, *Context, Pedantic);
+
+    // If anything is to be modified
+    if (reportDiagnostic(Context, Op)) {
+      // Macro expanded Loc's aren't a part of a FileEntry.
+      if (Manager.isMacroBodyExpansion(Loc))
+        return;
+
       // Checking for symlinks
       const FileEntry *Entry =
           Manager.getFileEntryForID(Manager.getFileID(Loc));
+      assert(Entry);
       const auto RealFilename = Entry->tryGetRealPathName();
       const auto Filename = Entry->getName();
       ChangedFiles.insert(Filename);
+
       if (RealFilename != Filename) {
-        unsigned ID = DiagEngine.getCustomDiagID(
-            DiagnosticsEngine::Warning, "The symlink at %0 pointing to %1 is changed to a file during modifications.");
-        DiagEngine.Report(ID) << Filename << RealFilename;
+        report(DiagEngine, DiagnosticsEngine::Warning,
+               "The symlink at %0 pointing to %1 is changed to a file during "
+               "modifications.",
+               Filename, RealFilename);
       }
 
       if (Rewriter->WriteFixedFiles()) {
-        llvm::errs() << "ERROR: Writing the FixItHint was unsuccessful.\n";
+        report(DiagEngine, DiagnosticsEngine::Error,
+               "Writing the FixItHint was unsuccessful.");
       }
     }
   }
@@ -395,8 +478,9 @@ public:
 class Consumer : public clang::ASTConsumer {
 public:
   Consumer(StringRef Filename)
-      : Handler(cli::ModifyOption, cli::SuffixOption, cli::PedanticOption,
-                cli::ErrorOptList, cli::PublishSummary) {
+      : Handler(cli::SuffixOption, cli::PedanticOption,
+                cli::PublishSummary, cli::DontExpandIncludes, cli::ErrorOptList,
+                cli::FixOptList) {
     // For those who use a hybrid of C and C++ files, we don't want to modify
     // any source that may potentially involve C.
     // TODO WARNING: Header files shared between C and C++ files cannot be
