@@ -1,5 +1,5 @@
+#include "Cast.h"
 #include "ClangCXXCastTestCases.h"
-#include "ClangCast.h"
 #include "ClangChangeQualifierTestCases.h"
 #include "ClangFunctionPtrTestCases.h"
 #include "ClangQualifierTestCases.h"

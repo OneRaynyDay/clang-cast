@@ -1,13 +1,14 @@
-set(LLVM_LINK_COMPONENTS support)
+set(LLVM_LINK_COMPONENTS
+        support)
 
-add_clang_executable(clang-cast
-        ClangCast.cpp
-        )
+add_clang_tool(clang-cast
+  ClangCast.cpp
+  )
 
 target_link_libraries(clang-cast
-        PRIVATE
-        clangTooling
-        clangBasic
-        clangRewriteFrontend
-        clangASTMatchers
-        )
+  PRIVATE
+  clangTooling
+  clangBasic
+  clangRewriteFrontend
+  clangASTMatchers
+  )
