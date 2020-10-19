@@ -86,7 +86,7 @@ public:
 
   // The Context needs to be modifiable because we need to
   // call non-const functions on SourceManager
-  void setRewriter(clang::ASTContext *Context);
+  void setRewriter(clang::ASTContext *Context, bool Modify);
 
   void checkForSymlinks(const SourceManager &Manager,
                         const SourceLocation &Loc,
@@ -195,6 +195,8 @@ std::string Matcher::replaceExpression(const CStyleCastOperation &Op,
 
 bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
                                const CStyleCastOperation &Op) {
+  // No FixItRewriter should be set as consumer until we need to fix anything.
+  setRewriter(ModifiableContext, false);
   const auto &Context = Op.getContext();
   auto &DiagEngine = Context.getDiagnostics();
 
@@ -248,17 +250,14 @@ bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
 
   // Set the diagnostic consumer accordingly.
   bool Modify = (CurMask & FixMask) == CurMask;
-  if (Modify) {
-    setRewriter(ModifiableContext);
-    const auto FixIt =
-        clang::FixItHint::CreateReplacement(CastRange, Replacement);
-    reportWithLoc(DiagEngine, Level, "C style cast can be replaced by '%0'",
-                  StartingLoc, Replacement, FixIt);
-  }
-  else {
-    reportWithLoc(DiagEngine, Level, "C style cast can be replaced by '%0'",
-                  StartingLoc, Replacement, ExprRange);
-  }
+
+  // TODO: For clang-tidy, we want to put a logical branch here and not input
+  // FixIt if we don't want to modify it.
+  setRewriter(ModifiableContext, Modify);
+  const auto FixIt =
+      clang::FixItHint::CreateReplacement(CastRange, Replacement);
+  reportWithLoc(DiagEngine, Level, "C style cast can be replaced by '%0'",
+                StartingLoc, Replacement, FixIt);
   return Modify;
 }
 
@@ -308,16 +307,22 @@ void Matcher::checkForSymlinks(const SourceManager &Manager,
   }
 }
 
-void Matcher::setRewriter(clang::ASTContext *Context) {
-  if (!Rewriter) {
-    Rewriter = std::make_unique<clang::FixItRewriter>(
-        Context->getDiagnostics(), Context->getSourceManager(),
-        Context->getLangOpts(), &FixItOptions);
+void Matcher::setRewriter(clang::ASTContext *Context, bool Modify) {
+  if (Modify) {
+    if (!Rewriter) {
+      Rewriter = std::make_unique<clang::FixItRewriter>(
+          Context->getDiagnostics(), Context->getSourceManager(),
+          Context->getLangOpts(), &FixItOptions);
+    }
+
+    // If we modify, we don't want the diagnostics engine to own it.
+    // If we don't modify, we want the diagnostics engine to own the original
+    // client.
+    Context->getDiagnostics().setClient(Rewriter.get(), false);
   }
-  // If we modify, we don't want the diagnostics engine to own it.
-  // If we don't modify, we want the diagnostics engine to own the original
-  // client.
-  Context->getDiagnostics().setClient(Rewriter.get(), false);
+  else {
+    Rewriter.reset(nullptr);
+  }
 }
 
 } // namespace cppcast
