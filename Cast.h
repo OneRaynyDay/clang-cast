@@ -5,8 +5,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// This file contains classes that manage semantics of C style casts.
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_H
+
 #include "CastOptions.h"
 #include "CastUtils.h"
 #include "clang/AST/ASTConsumer.h"
@@ -18,10 +24,27 @@
 #include "clang/Tooling/Tooling.h"
 #include <exception>
 
+//===----------------------------------------------------------------------===//
+// CStyleCastOperation
+//===----------------------------------------------------------------------===//
+
 namespace clang {
 namespace cppcast {
 
-// This class only exists while the Context is still alive
+/// CStyleCastOperation is responsible for capturing a CStyleCastExpr AST node
+/// and perform some basic semantic analysis on the C style cast's equivalent in
+/// C++ explicit cast expressions.
+///
+/// This class does not have any ownership semantics for the CStyleCastExpr
+/// itself, nor does it have ownership semantics for the underlying Context that
+/// the CStyleCastExpr is from.
+///
+/// Note that although some functions are similar to the Sema library, such as
+/// CastsAwayConstness vs. requireConstCast, it is a much simpler version as we
+/// assume compilation is successful and we are restricted to C++. The reason
+/// Sema was not used here is because the anonymous namespaces and static
+/// visibility of the original functions require leaking existing abstractions
+/// and a large refactoring in the fundamental Clang codebase.
 class CStyleCastOperation {
   const CStyleCastExpr &MainExpr;
   const QualType SubExprType;
@@ -32,6 +55,14 @@ class CStyleCastOperation {
   const bool Pedantic;
 
 public:
+  /// Initializes a new CStyleCastOperation.
+  /// \param CastExpr node to perform semantic analysis on.
+  /// \param Context the context that CastExpr belongs to.
+  /// \param Pedantic whether we should generate code that complies with
+  /// -pedantic and -pedantic-errors
+  ///
+  /// Note that we are canonicalizing the subexpression and cast types. We don't
+  /// yet provide typedef-preserving code generation.
   CStyleCastOperation(const CStyleCastExpr &CastExpr, const ASTContext &Context,
                       const bool Pedantic)
       : MainExpr(CastExpr),
@@ -48,7 +79,7 @@ public:
   CStyleCastOperation &operator=(CStyleCastOperation &&) = delete;
   virtual ~CStyleCastOperation() = default;
 
-  // Public access methods
+  /// public accessor methods, some of which return reference handles.
   QualType getSubExprType() const { return SubExprType; }
   QualType getCastType() const { return CastType; }
   const CStyleCastExpr &getCStyleCastExpr() const { return MainExpr; }
@@ -57,18 +88,37 @@ public:
   }
   const ASTContext &getContext() const { return Context; }
 
+  /// This method tests to see whether the conversion from SubExprType to
+  /// CastType is "casting away constness", as the standard describes.
+  ///
+  /// The standard states that a conversion is casting away constness when there
+  /// exists a cv-decomposition such that there exists no implicit qualification
+  /// conversion from SubExprType to CastType.
+  ///
+  /// Clang, without -pedantic or -pedantic-error, allows a few exceptional
+  /// cases, such as when two nested pointers diverge in type (pointer vs.
+  /// array, for example), and the rest of the qualifiers are ignored in the
+  /// cast-away-constness consideration. (exception: two member-pointers that
+  /// are pointers to different classes are considered the same "type").
+  ///
+  /// Some other notable exceptions include variable-length arrays (VLA) being
+  /// used in non-pedantic codebases, which we also allow.
   bool requireConstCast() const;
 
   /// This converts From(the cast type) into To(subexpression type)'s qualifiers
   /// to prepare for const_cast.
+  /// \return QualType corresponding to CastType but with minimal qualifiers to
+  /// satisfy for a non-pedantic conversion.
   ///
   /// For example:
+  /// \code
   /// const int* const (* const x) [2];
   /// (int***) x;
+  /// \endcode
   ///
   /// will yield (int* const* const* const) for typical, non-pedantic usage
   /// because const_cast will only modify the qualifiers where they are
-  /// both locally similar (they stop being similar at array vs. pointer)
+  /// both locally similar (they stop being similar at array vs. pointer).
   ///
   /// We need this to first perform static/reinterpret casts and then const
   /// cast. In order to do this, we must take the cast type and change its
@@ -81,42 +131,36 @@ public:
     return changeQualifierHelper(CastType, SubExprType);
   }
 
-  /// Main function for determining CXX cast type.
-  /// Recursively demote from const cast level.
+  /// Given the CStyleCastExpr, determine from its CastKind and other metadata
+  /// to decide what kind of C++ style cast is appropriate, if any. This does
+  /// not take into consideration const_cast and qualifiers. Use
+  /// requireConstCast() to determine whether const_cast should be added.
+  ///
+  /// \return CXXCast corresponding to the type of conversion.
   CXXCast getCastKindFromCStyleCast() const { return castHelper(&MainExpr); }
 
 private:
+  /// Auxilliary diagnostic methods
   void warnMemberPointerClass(const QualType &SEType,
                               const QualType &CType) const;
-
   void errorPedanticVLA(const QualType &T) const;
 
   /// \param SEType, a copy of QualType subexpression
   /// \param CType, a copy of QualType cast type
-  /// \param Context, the ASTContext pointer used for auxilliary functions
-  /// \param Pedantic, if false, we should follow clang's extensions,
-  ///                  otherwise follow the standard
-  /// \return true if the qualifier is downcasted from the possibly nested ptr
-  /// or
-  ///         pod/array type, false otherwise.
+  /// \return true if the const was casted away, false otherwise.
   ///
-  /// NOTE: We are assuming that reinterpret_cast will have already taken care
-  /// of the downcasting of nested function pointers, and if we have
-  /// nested function pointers, they have the same qualifiers.
-  bool recurseDowncastCheck(const QualType &SEType,
-                            const QualType &CType) const;
+  /// IMPORTANT: We are assuming that reinterpret_cast will have already taken
+  /// care of the downcasting of nested function pointers, and if we have nested
+  /// function pointers, they have the same qualifiers.
+  bool castAwayConst(const QualType &SEType, const QualType &CType) const;
 
   /// \param From, the CastType, which needs to be modified to not require const
   /// cast
   /// \param To, the SubExpression, which has specific qualifiers on it.
-  /// \param Context, ASTContext for helper
   /// \return QualType mirroring From but with qualifiers on To.
   QualType changeQualifierHelper(QualType From, const QualType &To) const;
 
-  /// A helper function for getCastKindFromCStyleCast, which
-  /// determines the least power of cast required by recursing
-  /// CastExpr AST nodes until a non-cast expression has been reached.
-  ///
+  /// Recurse CastExpr AST nodes until a non-cast expression has been reached.
   /// \return CXXCast enum corresponding to the lowest power cast required.
   CXXCast castHelper(const Expr *Expression) const;
 
@@ -161,7 +205,7 @@ bool CStyleCastOperation::requireConstCast() const {
   // Case 2, 3 - pointer type & POD type
   // if the pointer qualifiers are downcasted at any level, then fail.
   // if the POD qualifiers are downcasted, then fail.
-  return recurseDowncastCheck(ModifiedImpliedSubExprType, ModifiedCastType);
+  return castAwayConst(ModifiedImpliedSubExprType, ModifiedCastType);
 }
 
 void CStyleCastOperation::warnMemberPointerClass(const QualType &SEType,
@@ -198,20 +242,8 @@ void CStyleCastOperation::errorPedanticVLA(const QualType &T) const {
   }
 }
 
-/// \param SEType, a copy of QualType subexpression
-/// \param CType, a copy of QualType cast type
-/// \param Context, the ASTContext pointer used for auxilliary functions
-/// \param Pedantic, if false, we should follow clang's extensions,
-///                  otherwise follow the standard
-/// \return true if the qualifier is downcasted from the possibly nested ptr
-/// or
-///         pod/array type, false otherwise.
-///
-/// NOTE: We are assuming that reinterpret_cast will have already taken care
-/// of the downcasting of nested function pointers, and if we have
-/// nested function pointers, they have the same qualifiers.
-bool CStyleCastOperation::recurseDowncastCheck(const QualType &SEType,
-                                               const QualType &CType) const {
+bool CStyleCastOperation::castAwayConst(const QualType &SEType,
+                                        const QualType &CType) const {
   if (SEType.isMoreQualifiedThan(CType)) {
     return true;
   }
@@ -234,14 +266,9 @@ bool CStyleCastOperation::recurseDowncastCheck(const QualType &SEType,
   QualType CStrippedType = details::stripLayer(CType, Context);
 
   // Continue recursing for pointer types
-  return recurseDowncastCheck(SEStrippedType, CStrippedType);
+  return castAwayConst(SEStrippedType, CStrippedType);
 }
 
-/// \param From, the CastType, which needs to be modified to not require const
-/// cast
-/// \param To, the SubExpression, which has specific qualifiers on it.
-/// \param Context, ASTContext for helper
-/// \return QualType mirroring From but with qualifiers on To.
 QualType CStyleCastOperation::changeQualifierHelper(QualType From,
                                                     const QualType &To) const {
   // If it's a function pointer, then we don't change the qualifier and we've
@@ -303,11 +330,6 @@ QualType CStyleCastOperation::changeQualifierHelper(QualType From,
   return From;
 }
 
-/// A helper function for getCastKindFromCStyleCast, which
-/// determines the least power of cast required by recursing
-/// CastExpr AST nodes until a non-cast expression has been reached.
-///
-/// \return CXXCast enum corresponding to the lowest power cast required.
 CXXCast CStyleCastOperation::castHelper(const Expr *Expression) const {
   const auto *CastExpression = dyn_cast<CastExpr>(Expression);
 
@@ -329,14 +351,6 @@ CXXCast CStyleCastOperation::castHelper(const Expr *Expression) const {
                   castHelper(CastExpression->getSubExpr()));
 }
 
-/// Given a CastExpr, determine from its CastKind and other metadata
-/// the corresponding CXXCast to use (NOTE: this does not include
-///     the additional const cast for qualifiers if it is
-///     static/interpret. Use isQualifierModified for that.)
-/// Note that it's a CastExpr, which can be either CStyleCastExpr
-/// or ImplicitCastExpr or any of its children.
-///
-/// \return CXXCast corresponding to the type of conversion.
 CXXCast CStyleCastOperation::getCastType(const CastExpr *CastExpression) const {
   switch (CastExpression->getCastKind()) {
   /// No-op cast type
@@ -345,24 +359,25 @@ CXXCast CStyleCastOperation::getCastType(const CastExpr *CastExpression) const {
   case CastKind::CK_LValueToRValue:
     return CXXCast::CC_NoOpCast;
 
-  /// Static cast types
-  // This cannot be expressed in the form of a C style cast.
+  // Static cast (with extension) types
   case CastKind::CK_UncheckedDerivedToBase:
   case CastKind::CK_DerivedToBase: {
-    // Special case:
-    // The base class A is inaccessible (private)
-    // so we can't static_cast. We can't reinterpret_cast
-    // either because reinterpret casting to A* would point
-    // to the data segment owned by Pad. We can't convert to C style
-    // in this case.
-    //
-    // struct A { int i; };
-    // struct Pad { int i; };
-    // class B: Pad, A {};
-    //
-    // A *f(B *b) { return (A*)(b); }
-    //
-    // We assume that the base class is unambiguous.
+    /// Special case:
+    /// The base class A is inaccessible (private)
+    /// so we can't static_cast. We can't reinterpret_cast
+    /// either because reinterpret casting to A* would point
+    /// to the data segment owned by Pad. We can't convert to C style
+    /// in this case.
+    ///
+    /// \code
+    /// struct A { int i; };
+    /// struct Pad { int i; };
+    /// class B: Pad, A {};
+    ///
+    /// A *f(B *b) { return (A*)(b); }
+    /// \endcode
+    ///
+    /// We assume that the base class is unambiguous.
     const CXXRecordDecl *Base = CastType->getPointeeCXXRecordDecl();
     const CXXRecordDecl *Derived = SubExprType->getPointeeCXXRecordDecl();
     return details::getBaseDerivedCast(Base, Derived);
@@ -419,7 +434,7 @@ CXXCast CStyleCastOperation::getCastType(const CastExpr *CastExpression) const {
   case CastKind::CK_IntToOCLSampler:
     return CXXCast::CC_StaticCast;
 
-  /// Reinterpret cast types
+  // Reinterpret cast types
   case CastKind::CK_BitCast:
   case CastKind::CK_LValueBitCast:
   case CastKind::CK_IntegralToPointer:
@@ -428,11 +443,12 @@ CXXCast CStyleCastOperation::getCastType(const CastExpr *CastExpression) const {
   case CastKind::CK_PointerToIntegral:
     return CXXCast::CC_ReinterpretCast;
 
-  /// C style cast types
+  // C style cast types
   // Dependent types are left as they are.
   case CastKind::CK_Dependent:
     return CXXCast::CC_CStyleCast;
 
+  // Invalid cast types for C++
   // Union casts is not available in C++.
   case CastKind::CK_ToUnion:
   // Built-in functions must be directly called and don't have
@@ -440,9 +456,10 @@ CXXCast CStyleCastOperation::getCastType(const CastExpr *CastExpression) const {
   case CastKind::CK_BuiltinFnToFnPtr:
   // C++ does not officially support the Objective C extensions.
   // We mark these as invalid.
-  // Objective C pointer types &
-  // Objective C automatic reference counting (ARC) &
-  // Objective C blocks
+  // - Objective C pointer types &
+  // - Objective C automatic reference counting (ARC)
+  // - Objective C blocks
+  // - etc
   case CastKind::CK_CPointerToObjCPointerCast:
   case CastKind::CK_BlockPointerToObjCPointerCast:
   case CastKind::CK_AnyPointerToBlockPointerCast:

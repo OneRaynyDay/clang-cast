@@ -15,6 +15,17 @@
 namespace clang {
 namespace cppcast {
 
+/// Reports messages with a source location, typically used to address
+/// specific code segments.
+///
+/// \tparam N length of string
+/// \tparam Args variadic types to be accepted by DiagnosticBuilder
+/// \param Engine the diagnostic engine to report with
+/// \param Level diagnostic level
+/// \param FormatString A C string with N characters with potential clang format strings
+/// \param Loc The starting location in the translation unit to address
+/// \param args data to be formatted into FormatString
+/// \return resulting message object to be emitted.
 template <unsigned N, typename... Args>
 DiagnosticBuilder reportWithLoc(DiagnosticsEngine &Engine,
                                 const DiagnosticsEngine::Level &Level,
@@ -25,6 +36,8 @@ DiagnosticBuilder reportWithLoc(DiagnosticsEngine &Engine,
   return (Engine.Report(Loc, ID) << ... << std::forward<Args>(args));
 }
 
+/// Reports messages, typically used to address a translation-unit/file wide
+/// diagnostic. Refer to reportWithLoc for more information.
 template <unsigned N, typename... Args>
 DiagnosticBuilder report(DiagnosticsEngine &Engine, DiagnosticsEngine::Level Level,
                          const char (&FormatString)[N], Args &&... args) {
@@ -37,6 +50,8 @@ namespace details {
 
 /// Determines whether Base is accessible from Derived class.
 ///
+/// \param Base the base class declaration
+/// \param Derived the derived class declaration
 /// \returns true if Base is accessible from Derived or are the same class, and
 ///          false if Base is not accessible from Derived or are
 ///          unrelated classes
@@ -66,6 +81,8 @@ bool isAccessible(const CXXRecordDecl *Base, const CXXRecordDecl *Derived) {
 /// Determines the proper cast type for a Base to/from Derived conversion
 /// based off of accessbility.
 ///
+/// \param Base the base class declaration
+/// \param Derived the derived class declaration
 /// \return CXXCast enum corresponding to the lowest power cast required.
 CXXCast getBaseDerivedCast(const CXXRecordDecl *Base,
                            const CXXRecordDecl *Derived) {
@@ -76,6 +93,11 @@ CXXCast getBaseDerivedCast(const CXXRecordDecl *Base,
     return CXXCast::CC_StaticCast;
 }
 
+/// Removes a layer of pointers, member pointers, arrays.
+///
+/// \param T type to strip, assumed to be one of the above.
+/// \param Context, the ASTContext to create the array type edge case.
+/// \return type corresponding to T stripped of one indirection layer.
 QualType stripLayer(const QualType &T, const ASTContext &Context) {
   if (T->isPointerType()) {
     const PointerType *PT = dyn_cast<PointerType>(T);
@@ -93,17 +115,18 @@ QualType stripLayer(const QualType &T, const ASTContext &Context) {
   return T;
 }
 
+/// \param T some qualified type
+/// \return true if T is a function pointer
 bool isFunctionPtr(const QualType &T) {
   return T->isMemberFunctionPointerType() || T->isFunctionPointerType();
 }
 
-/// The types A and B are locally similar if
-/// - pointer, i.e. `int*` is a pointer to an `int`.
-/// - member pointer, i.e. given `struct t{};`, `int t::* const ptr` is a
-/// pointer to an `int` member of struct `t`.
-/// - array / array of unknown bound, i.e. `int a[2]` and `int a[]`, where the
-/// latter is likely a partial `extern` type.
-/// - both are of same terminal type.
+/// We define the types A and B to be locally similar if they are both
+/// - pointer, i.e. int* is a pointer to an int
+/// - member pointer, i.e. given struct t, int t::* const ptr is a
+/// pointer to an int member of struct t.
+/// - array / array of unknown bound, i.e. int a[2] and int a[], where the
+/// latter is likely a partial 'extern' type.
 bool isLocallySimilar(const QualType &A, const QualType &B) {
   bool AIsPtr = A->isPointerType();
   bool BIsPtr = B->isPointerType();
