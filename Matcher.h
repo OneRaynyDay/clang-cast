@@ -194,7 +194,6 @@ std::string Matcher::replaceExpression(const CStyleCastOperation &Op,
 
 bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
                                const CStyleCastOperation &Op) {
-  setRewriter(ModifiableContext);
   const auto &Context = Op.getContext();
   auto &DiagEngine = Context.getDiagnostics();
 
@@ -249,13 +248,16 @@ bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
   // Set the diagnostic consumer accordingly.
   bool Modify = (CurMask & FixMask) == CurMask;
   if (Modify) {
+    setRewriter(ModifiableContext);
     const auto FixIt =
         clang::FixItHint::CreateReplacement(CastRange, Replacement);
     reportWithLoc(DiagEngine, Level, "C style cast can be replaced by '%0'",
                   StartingLoc, Replacement, FixIt);
   }
-  reportWithLoc(DiagEngine, Level, "C style cast can be replaced by '%0'",
-                StartingLoc, Replacement, ExprRange);
+  else {
+    reportWithLoc(DiagEngine, Level, "C style cast can be replaced by '%0'",
+                  StartingLoc, Replacement, ExprRange);
+  }
   return Modify;
 }
 

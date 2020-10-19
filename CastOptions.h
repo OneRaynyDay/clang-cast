@@ -139,6 +139,7 @@ public:
     } else {
       InPlace = false;
     }
+    FixWhatYouCan = true;
   }
 
   std::string RewriteFilename(const std::string &Filename, int &fd) override {
