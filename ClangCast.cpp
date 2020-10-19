@@ -10,6 +10,7 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
+#include "clang/Frontend/CompilerInstance.h"
 
 using namespace clang::ast_matchers;
 using namespace clang;

@@ -8,6 +8,7 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CONSUMER_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CONSUMER_H
 
+#include "clang/AST/ASTConsumer.h"
 #include "Matcher.h"
 
 namespace clang {

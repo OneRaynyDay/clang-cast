@@ -9,7 +9,6 @@
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_OPTIONS_H
 
 #include "clang/Rewrite/Frontend/FixItRewriter.h"
-#include <cstdint>
 #include <string>
 
 namespace clang {
