@@ -16,6 +16,7 @@
 
 #include "Cast.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/Lexer.h"
 
 using namespace clang::ast_matchers;
@@ -44,6 +45,7 @@ class Matcher : public MatchFinder::MatchCallback {
   /// switch back and forth between the TextDiagnosticPrinter and FixItRewriter.
   RewriterPtr Rewriter;
   rewriter::FixItRewriterOptions FixItOptions;
+  DiagnosticConsumer *OriginalWriter;
 
   /// Whether or not the Matcher should emit code compliant with -pedantic
   bool Pedantic;
@@ -127,11 +129,17 @@ private:
   /// Sets a client to the diagnostic engine depending on Modify:
   /// if Modify is true, then we change the diagnostics client to a
   /// FixItRewriter which takes and owns the TextDiagnosticPrinter from the
-  /// engine. If modify is false, then the FixItRewriter is destroyed and the
-  /// TextDiagnosticPrinter it's holding is released back to the engine. The
-  /// constructor and destructor of the rewriter is fairly low-cost and is just
-  /// a few pointer manipulations, so setting the client won't affect the
-  /// performance in a major way.
+  /// engine.
+  ///
+  /// If modify is false, then we can't just destroy the FixItRewriter, as the
+  /// previous FixIt's would be gone. If we already created a rewriter, then the
+  /// TextDiagnosticPrinter is owned by it when previously it was owned by the
+  /// engine. We do nothing if the rewriter hasn't been initialized, but this is
+  /// extremely precarious as it's juggling ownership between two objects as the
+  /// FixIt's are applied to subsets of the program.
+  ///
+  /// This function was born out of a necessity to work with FixItRewriter's
+  /// composition-of-consumers design which makes ownership very complicated.
   void setClient(clang::ASTContext *Context, bool Modify);
 
   /// A quick diagnostic warning for when symlinks are being overwritten by an
@@ -301,7 +309,10 @@ bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
   bool Modify = (CurMask & FixMask) == CurMask;
 
   // TODO: For clang-tidy, we want to put a logical branch here and not input
-  // FixIt if we don't want to modify it.
+  // FixIt if we don't want to modify it. If we set the consumer as
+  // FixItRewriter permanently, emitting an error (from --err-all, for example)
+  // will cause FixIt to emit "FIXIT: detected an error it cannot fix", which
+  // clutters up the real diagnostics.
   setClient(ModifiableContext, Modify);
   const auto FixIt =
       clang::FixItHint::CreateReplacement(CastRange, Replacement);
@@ -333,8 +344,7 @@ void Matcher::run(const MatchFinder::MatchResult &Result) {
   if (reportDiagnostic(Context, Op)) {
     checkForSymlinks(Manager, Loc, DiagEngine);
     if (Rewriter->WriteFixedFiles()) {
-      report(DiagEngine, DiagnosticsEngine::Error,
-             "Writing the FixItHint was unsuccessful.");
+      llvm::errs() << "Writing the FixItHint was unsuccessful.\n";
     }
   }
 }
@@ -357,11 +367,14 @@ void Matcher::checkForSymlinks(const SourceManager &Manager,
 }
 
 void Matcher::setClient(clang::ASTContext *Context, bool Modify) {
+  auto &DiagEngine = Context->getDiagnostics();
   if (Modify) {
+    // First time initializing, means that engine owns TDP.
     if (!Rewriter) {
+      OriginalWriter = DiagEngine.getClient();
       Rewriter = std::make_unique<clang::FixItRewriter>(
-          Context->getDiagnostics(), Context->getSourceManager(),
-          Context->getLangOpts(), &FixItOptions);
+          DiagEngine, Context->getSourceManager(), Context->getLangOpts(),
+          &FixItOptions);
     }
 
     // If we modify, we don't want the diagnostics engine to own it.
@@ -370,7 +383,14 @@ void Matcher::setClient(clang::ASTContext *Context, bool Modify) {
     Context->getDiagnostics().setClient(Rewriter.get(),
                                         /*ShouldOwnClient=*/false);
   } else {
-    Rewriter.reset(nullptr);
+    // Rewriter not initialized, therefore do nothing, as the TDP client
+    // is still there and owned by engine.
+    if (!Rewriter)
+      return;
+    // Rewriter is initialized, therefore set TDP (not owned by engine,
+    // owned by FIR)
+    Context->getDiagnostics().setClient(OriginalWriter,
+                                        /*ShouldOwnClient=*/false);
   }
 }
 
