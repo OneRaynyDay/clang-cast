@@ -5,10 +5,11 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// This file contains the enumerations and options that dictate behavior of
-// the Matcher object defined in Matcher.h.
-//
+///
+/// \file
+/// This file contains the enumerations and options that dictate behavior of
+/// the Matcher object defined in Matcher.h.
+///
 //===----------------------------------------------------------------------===//
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_OPTIONS_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_OPTIONS_H

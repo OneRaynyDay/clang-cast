@@ -5,22 +5,25 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// This file contains tests of:
-//   - Getting the correct non-const cast type from a C style cast
-//   - Correctly determing whether an expression is casting away constness
-//   - Checking edge cases (function ptrs, private access inheritance, etc)
-//
+///
+/// \file
+/// This file contains tests of:
+///   - Getting the correct non-const cast type from a C style cast
+///   - Correctly determing whether an expression is casting
+///     away constness
+///   - Checking edge cases (function ptrs, private access
+///     inheritance, etc)
+///
 //===----------------------------------------------------------------------===//
 
 #include "Cast.h"
-#include "clang/Tooling/Tooling.h"
 #include "ClangCXXCastTestCases.h"
 #include "ClangChangeQualifierTestCases.h"
 #include "ClangFunctionPtrTestCases.h"
 #include "ClangQualifierTestCases.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
+#include "clang/Tooling/Tooling.h"
 #include "gtest/gtest.h"
 #include <iostream>
 #include <set>

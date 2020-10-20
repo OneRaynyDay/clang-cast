@@ -5,17 +5,18 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// This file contains utility functions for semantics and diagnostics.
-//
+///
+/// \file
+/// This file contains utility functions for semantics and diagnostics.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_UTILS_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_UTILS_H
 
-#include "clang/AST/DeclCXX.h"
-#include "clang/AST/ASTContext.h"
 #include "CastOptions.h"
+#include "clang/AST/ASTContext.h"
+#include "clang/AST/DeclCXX.h"
 
 namespace clang {
 namespace cppcast {
@@ -48,15 +49,17 @@ std::string cppCastToString(const CXXCast &Cast) {
 /// \tparam Args variadic types to be accepted by DiagnosticBuilder
 /// \param Engine the diagnostic engine to report with
 /// \param Level diagnostic level
-/// \param FormatString A C string with N characters with potential clang format strings
-/// \param Loc The starting location in the translation unit to address
-/// \param args data to be formatted into FormatString
-/// \return resulting message object to be emitted.
+/// \param FormatString A C string with \p N characters with potential clang
+/// format strings
+/// \param Loc The starting location in the translation unit to
+/// address
+/// \param args data to be formatted into FormatString \return resulting
+/// message object to be emitted.
 template <unsigned N, typename... Args>
 DiagnosticBuilder reportWithLoc(DiagnosticsEngine &Engine,
                                 const DiagnosticsEngine::Level &Level,
-                                const char (&FormatString)[N], const SourceLocation &Loc,
-                                Args &&... args) {
+                                const char (&FormatString)[N],
+                                const SourceLocation &Loc, Args &&... args) {
   unsigned ID = Engine.getCustomDiagID(Level, FormatString);
   // Binary left fold
   return (Engine.Report(Loc, ID) << ... << std::forward<Args>(args));
@@ -65,7 +68,8 @@ DiagnosticBuilder reportWithLoc(DiagnosticsEngine &Engine,
 /// Reports messages, typically used to address a translation-unit/file wide
 /// diagnostic. Refer to reportWithLoc for more information.
 template <unsigned N, typename... Args>
-DiagnosticBuilder report(DiagnosticsEngine &Engine, DiagnosticsEngine::Level Level,
+DiagnosticBuilder report(DiagnosticsEngine &Engine,
+                         DiagnosticsEngine::Level Level,
                          const char (&FormatString)[N], Args &&... args) {
   unsigned ID = Engine.getCustomDiagID(Level, FormatString);
   // Binary left fold
@@ -78,9 +82,9 @@ namespace details {
 ///
 /// \param Base the base class declaration
 /// \param Derived the derived class declaration
-/// \returns true if Base is accessible from Derived or are the same class, and
-///          false if Base is not accessible from Derived or are
-///          unrelated classes
+/// \returns true if \p Base is accessible from \p Derived or are the same
+/// class, and false if \p Base is not accessible from \p Derived or are
+/// unrelated classes
 bool isAccessible(const CXXRecordDecl *Base, const CXXRecordDecl *Derived) {
   if (!Base || !Derived)
     return false;
@@ -112,7 +116,7 @@ bool isAccessible(const CXXRecordDecl *Base, const CXXRecordDecl *Derived) {
 /// \return CXXCast enum corresponding to the lowest power cast required.
 CXXCast getBaseDerivedCast(const CXXRecordDecl *Base,
                            const CXXRecordDecl *Derived) {
-  assert(Base && Derived);
+  assert(Base && Derived && "Base and Derived decls cannot be null.");
   if (!details::isAccessible(Base, Derived))
     return CXXCast::CC_CStyleCast;
   else
@@ -123,7 +127,7 @@ CXXCast getBaseDerivedCast(const CXXRecordDecl *Base,
 ///
 /// \param T type to strip, assumed to be one of the above.
 /// \param Context, the ASTContext to create the array type edge case.
-/// \return type corresponding to T stripped of one indirection layer.
+/// \return type corresponding to \p T stripped of one indirection layer.
 QualType stripLayer(const QualType &T, const ASTContext &Context) {
   if (T->isPointerType()) {
     const PointerType *PT = dyn_cast<PointerType>(T);

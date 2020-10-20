@@ -5,9 +5,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// This file contains the ASTMatcher responsible for most of the diagnostics.
-//
+///
+/// \file
+/// This file contains the ASTMatcher responsible for most of the diagnostics.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_MATCHER_H
@@ -190,7 +191,7 @@ CharSourceRange Matcher::getRangeForExpression(const Expr *Expression,
   }
   auto ExprStart = Manager.getSpellingLoc(Expression->getBeginLoc());
   auto ExprEnd = Lexer::getLocForEndOfToken(
-      Manager.getSpellingLoc(Expression->getEndLoc()), 0,
+      Manager.getSpellingLoc(Expression->getEndLoc()), /*Offset=*/0,
       Context.getSourceManager(), Context.getLangOpts());
 
   return CharSourceRange::getCharRange(SourceRange{ExprStart, ExprEnd});
@@ -199,7 +200,8 @@ CharSourceRange Matcher::getRangeForExpression(const Expr *Expression,
 std::string Matcher::replaceExpression(const CStyleCastOperation &Op,
                                        CXXCast CXXCastKind,
                                        bool ConstCastRequired) {
-  assert(CXXCastKind != CXXCast::CC_ConstCast);
+  assert(CXXCastKind != CXXCast::CC_ConstCast &&
+         "Const cast enum cannot be passed in as CXXCastKind");
   QualType CastType = Op.getCastType();
   const Expr &SubExpr = Op.getSubExprAsWritten();
   const ASTContext &Context = Op.getContext();
@@ -243,7 +245,7 @@ std::string Matcher::replaceExpression(const CStyleCastOperation &Op,
 bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
                                const CStyleCastOperation &Op) {
   // No FixItRewriter should be set as consumer until we need to fix anything.
-  setClient(ModifiableContext, false);
+  setClient(ModifiableContext, /*Modify=*/false);
   const auto &Context = Op.getContext();
   auto &DiagEngine = Context.getDiagnostics();
 
@@ -314,7 +316,7 @@ void Matcher::run(const MatchFinder::MatchResult &Result) {
 
   const CStyleCastExpr *CastExpression =
       Result.Nodes.getNodeAs<CStyleCastExpr>("cast");
-  assert(CastExpression);
+  assert(CastExpression && "CastExpr cannot be null");
 
   const auto &Manager = Context->getSourceManager();
   const auto Loc = CastExpression->getBeginLoc();
@@ -341,7 +343,7 @@ void Matcher::checkForSymlinks(const SourceManager &Manager,
                                const SourceLocation &Loc,
                                DiagnosticsEngine &DiagEngine) {
   const FileEntry *Entry = Manager.getFileEntryForID(Manager.getFileID(Loc));
-  assert(Entry);
+  assert(Entry && "File entry cannot be null");
   const auto RealFilename = Entry->tryGetRealPathName();
   const auto Filename = Entry->getName();
   ChangedFiles.insert(Filename);
@@ -365,7 +367,8 @@ void Matcher::setClient(clang::ASTContext *Context, bool Modify) {
     // If we modify, we don't want the diagnostics engine to own it.
     // If we don't modify, we want the diagnostics engine to own the original
     // client.
-    Context->getDiagnostics().setClient(Rewriter.get(), false);
+    Context->getDiagnostics().setClient(Rewriter.get(),
+                                        /*ShouldOwnClient=*/false);
   } else {
     Rewriter.reset(nullptr);
   }

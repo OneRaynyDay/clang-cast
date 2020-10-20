@@ -5,6 +5,13 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// This file contains test cases for
+/// details::isFunctionPtr (defined in CastUtils.h)
+///
+//===----------------------------------------------------------------------===//
+
 #ifndef LLVM_PROJECT_CLANGFUNCTIONPTRTESTCASES_H
 #define LLVM_PROJECT_CLANGFUNCTIONPTRTESTCASES_H
 

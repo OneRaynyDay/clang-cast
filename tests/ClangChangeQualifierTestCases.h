@@ -5,6 +5,13 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// This file contains test cases for
+/// CStyleCast::changeQualifiers (defined in Cast.h)
+///
+//===----------------------------------------------------------------------===//
+
 #ifndef LLVM_PROJECT_CLANGCHANGEQUALIFIERTESTCASES_H
 #define LLVM_PROJECT_CLANGCHANGEQUALIFIERTESTCASES_H
 

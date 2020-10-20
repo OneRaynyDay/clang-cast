@@ -5,16 +5,17 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// This file contains the ASTConsumer class used in FrontendAction.
-//
+///
+/// \file
+/// This file contains the ASTConsumer class used in FrontendAction.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CONSUMER_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CONSUMER_H
 
-#include "clang/AST/ASTConsumer.h"
 #include "Matcher.h"
+#include "clang/AST/ASTConsumer.h"
 
 namespace clang {
 namespace cppcast {

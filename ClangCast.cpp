@@ -5,17 +5,18 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// This file is the main driver for the clang-cast tool.
-//
+///
+/// \file
+/// This file is the main driver for the clang-cast tool.
+///
 //===----------------------------------------------------------------------===//
 
 #include "Consumer.h"
+#include "clang/Frontend/CompilerInstance.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
-#include "clang/Frontend/CompilerInstance.h"
 
 using namespace clang::ast_matchers;
 using namespace clang;
@@ -67,7 +68,8 @@ llvm::cl::list<ErrorOpts> ErrorOptList(
         clEnumValN(EO_ConstCast, "err-const", "Error on const_cast"),
         clEnumValN(EO_CStyleCast, "err-cstyle",
                    "Error on non-convertible C style casts"),
-        clEnumValN(EO_NoOpCast, "err-noop", "Error on unnecessary C style casts"),
+        clEnumValN(EO_NoOpCast, "err-noop",
+                   "Error on unnecessary C style casts"),
         clEnumValN(EO_All, "err-all", "Error for all of the above")),
     llvm::cl::cat(ClangCastCategory));
 
@@ -119,7 +121,9 @@ public:
     if (!Compiler.getLangOpts().CPlusPlus) {
       llvm::report_fatal_error("clang-cast is only supported for C++.");
     }
-    return std::make_unique<Consumer>(cli::SuffixOption, cli::PedanticOption, cli::PublishSummary, cli::DontExpandIncludes, cli::ErrorOptList, cli::FixOptList);
+    return std::make_unique<Consumer>(
+        cli::SuffixOption, cli::PedanticOption, cli::PublishSummary,
+        cli::DontExpandIncludes, cli::ErrorOptList, cli::FixOptList);
   }
 };
 

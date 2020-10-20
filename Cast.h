@@ -5,9 +5,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// This file contains classes that manage semantics of C style casts.
-//
+///
+/// \file
+/// This file contains classes that manage semantics of C style casts.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_H
@@ -241,7 +242,8 @@ void CStyleCastOperation::warnMemberPointerClass(const QualType &SEType,
           Context.getDiagnostics(), DiagnosticsEngine::Warning,
           "C style cast performs a member-to-pointer cast from class %0 to "
           "%1, which are not equal",
-          MainExpr.getExprLoc(), QualType(SEClass, 0), QualType(CClass, 0));
+          MainExpr.getExprLoc(), QualType(SEClass, /*Quals=*/0),
+          QualType(CClass, /*Quals=*/0));
     }
   }
 }

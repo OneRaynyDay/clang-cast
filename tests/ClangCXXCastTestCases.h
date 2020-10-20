@@ -5,6 +5,13 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// This file contains test cases for
+/// CStyleCastOperation::getCastKindFromCStyleCast (defined in Cast.h)
+///
+//===----------------------------------------------------------------------===//
+
 #ifndef LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCXXCASTTESTCASES_H
 #define LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCXXCASTTESTCASES_H
 
