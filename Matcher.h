@@ -5,6 +5,11 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// This file contains the ASTMatcher responsible for most of the diagnostics.
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_MATCHER_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_MATCHER_H
 
@@ -17,54 +22,72 @@ using namespace clang::ast_matchers;
 namespace clang {
 namespace cppcast {
 
-/// Given a cast type enum of the form CXXCasts::CC_{type}, return the
-/// string representation of that respective type.
-std::string cppCastToString(const CXXCast &Cast) {
-  switch (Cast) {
-  case CXXCast::CC_ConstCast:
-    return "const_cast";
-  case CXXCast::CC_StaticCast:
-    return "static_cast";
-  case CXXCast::CC_ReinterpretCast:
-    return "reinterpret_cast";
-    // Below are only used for summary diagnostics
-  case CXXCast::CC_CStyleCast:
-    return "C style cast";
-  case CXXCast::CC_NoOpCast:
-    return "No-op cast";
-  default:
-    llvm_unreachable("The cast should never occur.");
-    return {};
-  }
-}
-
+/// Matcher is responsible for creating a CStyleCastOperation to perform
+/// semantic analysis on the CStyleCastExpr and decide what potential
+/// replacements are suitable for the expression.
+///
+/// The matcher decides whether to emit a warning or error or to additionally
+/// perform a fix based off of the bit masks created by enums in CastOptions.h.
+///
+/// The Matcher emits summaries if the flags are set, containing some summary
+/// statistics.
 class Matcher : public MatchFinder::MatchCallback {
-  // We switch between these two depending on whether a FixIt
-  // should actually be applied.
   using RewriterPtr = std::unique_ptr<clang::FixItRewriter>;
+  /// The FixItRewriter is actually a composable DiagnosticConsumer which
+  /// contains the original DiagnosticConsumer client, which is a
+  /// TextDiagnosticPrinter.
+  ///
+  /// If we have Rewriter set as the client, FixIt's will be fixed on the file.
+  /// We want to have granular control over which FixIt's to fix, so we do some
+  /// light pointer manipulation with the DiagnosticEngine in setClient to
+  /// switch back and forth between the TextDiagnosticPrinter and FixItRewriter.
   RewriterPtr Rewriter;
-  DiagnosticConsumer *Printer;
   rewriter::FixItRewriterOptions FixItOptions;
 
+  /// Whether or not the Matcher should emit code compliant with -pedantic
   bool Pedantic;
+
+  /// Whether or not the Matcher should publish a short blurb upon finishing
+  /// visiting a translation unit.
   bool PublishSummary;
+
+  /// Number of C style casts encountered
   unsigned TotalCasts;
+
+  /// Whether or not to diagnose & fix includes (Local modifications only)
   bool DontExpandIncludes;
+
+  /// Bitmask to determine which C style cast powers should give an error.
+  /// For example, if we met a cast that requires static cast,
+  /// and static cast is 0x1, and our mask is 0x10011, since the last bit is a
+  /// 1, we will emit the error.
   unsigned ErrMask;
+
+  /// Bitmask to determine which C style casts to fix.
   unsigned FixMask;
+
+  /// Keeps count of how many C++ cast conversion types there are.
+  /// Note that for casts that require multiple C++ casts, multiple types are
+  /// updated here.
   std::map<CXXCast, unsigned> Statistics;
+
+  /// List of files that were modified from the tool.
   std::set<StringRef> ChangedFiles;
 
 public:
-  // We can't initialize the RewriterPtr until we get an ASTContext.
-  Matcher(const std::string &Filename, const bool Pedantic, bool PublishSummary,
-          bool DontExpandIncludes, std::vector<cli::ErrorOpts> ErrorOptions,
+  /// Initializes a new Matcher.
+  /// \param FilenameSuffix the suffix to add to the filenames
+  /// \param Pedantic whether to check & emit code compliant with -pedantic
+  /// \param PublishSummary whether to publish a small summary at the end
+  /// \param DontExpandIncludes whether to parse cast exprs in headers
+  /// \param ErrorOptions vector of bitmasks for error/warn types of cast
+  /// \param FixOptions vector of bitmasks for fixing types of cast
+  Matcher(const std::string &FilenameSuffix, const bool Pedantic,
+          bool PublishSummary, bool DontExpandIncludes,
+          std::vector<cli::ErrorOpts> ErrorOptions,
           std::vector<cli::FixOpts> FixOptions);
 
   virtual ~Matcher();
-
-  CharSourceRange getRangeForExpression(const Expr *Expression,
-                                        const ASTContext &Context);
 
   /// There are a few cases for the replacement string:
   /// 1. No-op cast (remove the cast)
@@ -74,31 +97,54 @@ public:
   /// 5. Reinterpret cast
   /// 6. Reinterpret cast + const cast
   /// 7. C style cast (keep the cast as is)
+  /// \param Op operation wrapper
+  /// \param CXXCastKind kind of non const cast applied to the expr (can be
+  /// noop)
+  /// \param ConstCastRequired whether const cast should be added to the
+  /// existing casts
+  /// \return A string to replace the C style cast operation char range with.
   std::string replaceExpression(const CStyleCastOperation &Op,
                                 CXXCast CXXCastKind, bool ConstCastRequired);
 
   /// Given an ordered list of casts, use the ASTContext to report necessary
-  /// changes to the cast expression.
+  /// changes to the cast expression. Also performs a FixIt on the source code
+  /// if necessary.
+  /// \param ModifiableContext the context ptr needs to be modifiable in
+  /// order to set the diagnostic client
+  /// \param Op the operation wrapper
+  /// \return true if a FixIt has been applied
   bool reportDiagnostic(ASTContext *ModifiableContext,
                         const CStyleCastOperation &Op);
 
   virtual void run(const MatchFinder::MatchResult &Result);
 
-  // The Context needs to be modifiable because we need to
-  // call non-const functions on SourceManager
-  void setRewriter(clang::ASTContext *Context, bool Modify);
+private:
+  /// Given an expression, gives the character source range of the expr.
+  CharSourceRange getRangeForExpression(const Expr *Expression,
+                                        const ASTContext &Context);
 
-  void checkForSymlinks(const SourceManager &Manager,
-                        const SourceLocation &Loc,
-                        DiagnosticsEngine& DiagEngine);
+  /// Sets a client to the diagnostic engine depending on Modify:
+  /// if Modify is true, then we change the diagnostics client to a
+  /// FixItRewriter which takes and owns the TextDiagnosticPrinter from the
+  /// engine. If modify is false, then the FixItRewriter is destroyed and the
+  /// TextDiagnosticPrinter it's holding is released back to the engine. The
+  /// constructor and destructor of the rewriter is fairly low-cost and is just
+  /// a few pointer manipulations, so setting the client won't affect the
+  /// performance in a major way.
+  void setClient(clang::ASTContext *Context, bool Modify);
+
+  /// A quick diagnostic warning for when symlinks are being overwritten by an
+  /// actual file.
+  void checkForSymlinks(const SourceManager &Manager, const SourceLocation &Loc,
+                        DiagnosticsEngine &DiagEngine);
 };
 
 // We can't initialize the RewriterPtr until we get an ASTContext.
-Matcher::Matcher(const std::string &Filename, const bool Pedantic,
+Matcher::Matcher(const std::string &FilenameSuffix, const bool Pedantic,
                  bool PublishSummary, bool DontExpandIncludes,
                  std::vector<cli::ErrorOpts> ErrorOptions,
                  std::vector<cli::FixOpts> FixOptions)
-    : Rewriter(nullptr), FixItOptions(Filename), Pedantic(Pedantic),
+    : Rewriter(nullptr), FixItOptions(FilenameSuffix), Pedantic(Pedantic),
       PublishSummary(PublishSummary), TotalCasts(0),
       DontExpandIncludes(DontExpandIncludes),
       /* modify in ctr */ ErrMask(0),
@@ -115,7 +161,8 @@ Matcher::Matcher(const std::string &Filename, const bool Pedantic,
 Matcher::~Matcher() {
   if (PublishSummary) {
     for (auto const &[CXXCastKind, Freq] : Statistics) {
-      if (!Freq) continue;
+      if (!Freq)
+        continue;
       llvm::errs() << "The type " << cppCastToString(CXXCastKind)
                    << " has been issued " << Freq
                    << " times throughout the translation unit.\n";
@@ -196,7 +243,7 @@ std::string Matcher::replaceExpression(const CStyleCastOperation &Op,
 bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
                                const CStyleCastOperation &Op) {
   // No FixItRewriter should be set as consumer until we need to fix anything.
-  setRewriter(ModifiableContext, false);
+  setClient(ModifiableContext, false);
   const auto &Context = Op.getContext();
   auto &DiagEngine = Context.getDiagnostics();
 
@@ -253,7 +300,7 @@ bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
 
   // TODO: For clang-tidy, we want to put a logical branch here and not input
   // FixIt if we don't want to modify it.
-  setRewriter(ModifiableContext, Modify);
+  setClient(ModifiableContext, Modify);
   const auto FixIt =
       clang::FixItHint::CreateReplacement(CastRange, Replacement);
   reportWithLoc(DiagEngine, Level, "C style cast can be replaced by '%0'",
@@ -292,7 +339,7 @@ void Matcher::run(const MatchFinder::MatchResult &Result) {
 
 void Matcher::checkForSymlinks(const SourceManager &Manager,
                                const SourceLocation &Loc,
-                               DiagnosticsEngine& DiagEngine) {
+                               DiagnosticsEngine &DiagEngine) {
   const FileEntry *Entry = Manager.getFileEntryForID(Manager.getFileID(Loc));
   assert(Entry);
   const auto RealFilename = Entry->tryGetRealPathName();
@@ -307,7 +354,7 @@ void Matcher::checkForSymlinks(const SourceManager &Manager,
   }
 }
 
-void Matcher::setRewriter(clang::ASTContext *Context, bool Modify) {
+void Matcher::setClient(clang::ASTContext *Context, bool Modify) {
   if (Modify) {
     if (!Rewriter) {
       Rewriter = std::make_unique<clang::FixItRewriter>(
@@ -319,8 +366,7 @@ void Matcher::setRewriter(clang::ASTContext *Context, bool Modify) {
     // If we don't modify, we want the diagnostics engine to own the original
     // client.
     Context->getDiagnostics().setClient(Rewriter.get(), false);
-  }
-  else {
+  } else {
     Rewriter.reset(nullptr);
   }
 }

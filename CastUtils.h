@@ -1,10 +1,15 @@
-//===--- CastUtils.h - clang-cast ------------------------------------*- C++ -*-===//
+//===--- CastUtils.h - clang-cast -------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// This file contains utility functions for semantics and diagnostics.
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_UTILS_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_UTILS_H
 
@@ -14,6 +19,27 @@
 
 namespace clang {
 namespace cppcast {
+
+/// Given a cast type enum of the form CXXCasts::CC_{type}, return the
+/// string representation of that respective type.
+std::string cppCastToString(const CXXCast &Cast) {
+  switch (Cast) {
+  case CXXCast::CC_ConstCast:
+    return "const_cast";
+  case CXXCast::CC_StaticCast:
+    return "static_cast";
+  case CXXCast::CC_ReinterpretCast:
+    return "reinterpret_cast";
+    // Below are only used for summary diagnostics
+  case CXXCast::CC_CStyleCast:
+    return "C style cast";
+  case CXXCast::CC_NoOpCast:
+    return "No-op cast";
+  default:
+    llvm_unreachable("The cast should never occur.");
+    return {};
+  }
+}
 
 /// Reports messages with a source location, typically used to address
 /// specific code segments.

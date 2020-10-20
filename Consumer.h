@@ -5,6 +5,11 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// This file contains the ASTConsumer class used in FrontendAction.
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CONSUMER_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CONSUMER_H
 
@@ -17,7 +22,7 @@ namespace cppcast {
 class Consumer : public clang::ASTConsumer {
 public:
   template <typename... Args>
-  Consumer(StringRef Filename, Args&&... args)
+  Consumer(Args&&... args)
       : Handler(std::forward<Args>(args)...) {
     using namespace clang::ast_matchers;
     // TODO: Make this a constant instead of hardcode "cast"

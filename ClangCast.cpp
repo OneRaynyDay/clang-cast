@@ -5,6 +5,11 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// This file is the main driver for the clang-cast tool.
+//
+//===----------------------------------------------------------------------===//
+
 #include "Consumer.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
@@ -114,9 +119,7 @@ public:
     if (!Compiler.getLangOpts().CPlusPlus) {
       llvm::report_fatal_error("clang-cast is only supported for C++.");
     }
-    return std::make_unique<Consumer>(
-        Filename, cli::SuffixOption, cli::PedanticOption, cli::PublishSummary,
-        cli::DontExpandIncludes, cli::ErrorOptList, cli::FixOptList);
+    return std::make_unique<Consumer>(cli::SuffixOption, cli::PedanticOption, cli::PublishSummary, cli::DontExpandIncludes, cli::ErrorOptList, cli::FixOptList);
   }
 };
 

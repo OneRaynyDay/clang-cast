@@ -40,18 +40,40 @@ namespace cppcast {
 /// visibility of the original functions require leaking existing abstractions
 /// and a large refactoring in the fundamental Clang codebase.
 class CStyleCastOperation {
+  /// The main expression captured by a matcher
   const CStyleCastExpr &MainExpr;
+
+  /// The subexpression type in the C style cast.
+  /// For example:
+  /// \code
+  /// (int) 3.2f;
+  /// \endcode
+  ///
+  /// the subexpression is 3.2f, and its type is float.
   const QualType SubExprType;
+
+  /// The cast type in the C style cast.
+  /// For example:
+  /// \code
+  /// (int) 3.2f;
+  /// \endcode
+  ///
+  /// the cast type is int.
   const QualType CastType;
 
+  /// The context that the CStyleCastExpr belongs to.
   const ASTContext &Context;
+
+  /// The engine in the context responsible for printing diagnostics
   const DiagnosticsEngine &DiagEngine;
+
+  /// Whether or not the generated code should comply with -pedantic
   const bool Pedantic;
 
 public:
-  /// Initializes a new CStyleCastOperation.
-  /// \param CastExpr node to perform semantic analysis on.
-  /// \param Context the context that CastExpr belongs to.
+  /// Initializes a new CStyleCastOperation
+  /// \param CastExpr node to perform semantic analysis on
+  /// \param Context the context that CastExpr belongs to
   /// \param Pedantic whether we should generate code that complies with
   /// -pedantic and -pedantic-errors
   ///
