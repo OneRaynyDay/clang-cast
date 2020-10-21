@@ -12,8 +12,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_PROJECT_CLANGCHANGEQUALIFIERTESTCASES_H
-#define LLVM_PROJECT_CLANGCHANGEQUALIFIERTESTCASES_H
+#ifndef LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCHANGEQUALIFIERTESTCASES_H
+#define LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCHANGEQUALIFIERTESTCASES_H
 
 /// NOTE: We are not performing an implicit cast conversion, so the types
 /// are exactly decltype(p) when we pass it into changeQualifiers().
@@ -196,4 +196,4 @@ void f() {
 } // namespace changequal
 } // namespace testcases
 
-#endif // LLVM_PROJECT_CLANGCHANGEQUALIFIERTESTCASES_H
+#endif

@@ -31,23 +31,23 @@
 
 #define CLANG_CXX_CAST_CHECK(cast_kind, cxx_cast)                              \
   {                                                                            \
-    auto res = parse(cast_kind);                                               \
-    ASSERT_GE(res.first.size(), 1ul);                                          \
-    ASSERT_EQ(res.second.size(), 1ul);                                         \
-    ASSERT_TRUE(res.first.find(CastKind::CK_##cast_kind) != res.first.end());  \
-    ASSERT_EQ(res.second[0], CXXCast::CC_##cxx_cast);                          \
+    auto Res = parse(cast_kind);                                               \
+    ASSERT_GE(Res.first.size(), 1ul);                                          \
+    ASSERT_EQ(Res.second.size(), 1ul);                                         \
+    ASSERT_TRUE(Res.first.find(CastKind::CK_##cast_kind) != Res.first.end());  \
+    ASSERT_EQ(Res.second[0], CXXCast::CC_##cxx_cast);                          \
   }
 
 #define CLANG_QUAL_CHECK(test_case, req_const, pedantic)                       \
   {                                                                            \
-    auto res = parse(test_case, pedantic);                                     \
-    ASSERT_EQ(res, req_const);                                                 \
+    auto Res = parse(test_case, pedantic);                                     \
+    ASSERT_EQ(Res, req_const);                                                 \
   }
 
 #define CLANG_FUNC_PTR_CHECK(test_case, detected)                              \
   {                                                                            \
-    auto res = parse(test_case);                                               \
-    ASSERT_EQ(res, detected);                                                  \
+    auto Res = parse(test_case);                                               \
+    ASSERT_EQ(Res, detected);                                                  \
   }
 
 using namespace testcases;
@@ -99,11 +99,11 @@ protected:
   std::pair<CastKindSet, CXXCastVector> parse(const StringRef Code) {
     // Parses a single translation unit (from text)
     // and returns the CXXCasts in order of traversed.
-    std::unique_ptr<clang::ASTUnit> ast(clang::tooling::buildASTFromCode(Code));
+    std::unique_ptr<clang::ASTUnit> Ast(clang::tooling::buildASTFromCode(Code));
     CStyleCastCollector Collector;
     MatchFinder Finder;
     Finder.addMatcher(CStyleCastMatcher, &Collector);
-    Finder.matchAST(ast->getASTContext());
+    Finder.matchAST(Ast->getASTContext());
     return {Collector.CastKinds, Collector.Casts};
   }
 };
@@ -133,11 +133,11 @@ protected:
       : CStyleCastMatcher(cStyleCastExpr().bind(CastVar)) {}
 
   bool parse(const StringRef Code, bool Pedantic) {
-    std::unique_ptr<clang::ASTUnit> ast(clang::tooling::buildASTFromCode(Code));
+    std::unique_ptr<clang::ASTUnit> Ast(clang::tooling::buildASTFromCode(Code));
     QualifierChecker Checker(Pedantic);
     MatchFinder Finder;
     Finder.addMatcher(CStyleCastMatcher, &Checker);
-    Finder.matchAST(ast->getASTContext());
+    Finder.matchAST(Ast->getASTContext());
     return Checker.RequireConstCast;
   }
 };
@@ -161,11 +161,11 @@ protected:
   ClangFunctionPtrDetectionTest() : VarDeclMatcher(varDecl().bind(DeclVar)) {}
 
   bool parse(const StringRef Code) {
-    std::unique_ptr<clang::ASTUnit> ast(clang::tooling::buildASTFromCode(Code));
+    std::unique_ptr<clang::ASTUnit> Ast(clang::tooling::buildASTFromCode(Code));
     FunctionPtrDetector Detector;
     MatchFinder Finder;
     Finder.addMatcher(VarDeclMatcher, &Detector);
-    Finder.matchAST(ast->getASTContext());
+    Finder.matchAST(Ast->getASTContext());
     return Detector.FoundFunctionPtr;
   }
 };
@@ -285,20 +285,19 @@ TEST_F(ClangCXXCastTest, TestCStyleCastTypes) {
 TEST_F(ClangCXXCastTest, TestEdgeCases) {
   using namespace edgecases;
   {
-    auto res = parse(DerivedToBasePrivateSpecifier);
-    ASSERT_GE(res.first.size(), 1ul);
-    ASSERT_GE(res.second.size(), 1ul);
-    ASSERT_TRUE(res.first.find(CastKind::CK_DerivedToBase) != res.first.end());
-    ASSERT_EQ(res.second[0], CXXCast::CC_CStyleCast);
+    auto Res = parse(DerivedToBasePrivateSpecifier);
+    ASSERT_GE(Res.first.size(), 1ul);
+    ASSERT_GE(Res.second.size(), 1ul);
+    ASSERT_TRUE(Res.first.find(CastKind::CK_DerivedToBase) != Res.first.end());
+    ASSERT_EQ(Res.second[0], CXXCast::CC_CStyleCast);
   }
   {
-    auto res = parse(BaseToDerivedPrivateSpecifier);
-    ASSERT_GE(res.first.size(), 1ul);
-    ASSERT_GE(res.second.size(), 1ul);
-    ASSERT_TRUE(res.first.find(CastKind::CK_BaseToDerived) != res.first.end());
-    ASSERT_EQ(res.second[0], CXXCast::CC_CStyleCast);
+    auto Res = parse(BaseToDerivedPrivateSpecifier);
+    ASSERT_GE(Res.first.size(), 1ul);
+    ASSERT_GE(Res.second.size(), 1ul);
+    ASSERT_TRUE(Res.first.find(CastKind::CK_BaseToDerived) != Res.first.end());
+    ASSERT_EQ(Res.second[0], CXXCast::CC_CStyleCast);
   }
-  CLANG_CXX_CAST_CHECK(Dependent, CStyleCast);
 }
 
 /// These tests mean:

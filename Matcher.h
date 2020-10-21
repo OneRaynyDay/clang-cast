@@ -119,7 +119,7 @@ public:
   bool reportDiagnostic(ASTContext *ModifiableContext,
                         const CStyleCastOperation &Op);
 
-  virtual void run(const MatchFinder::MatchResult &Result);
+  virtual void run(const MatchFinder::MatchResult &Result) override;
 
 private:
   /// Given an expression, gives the character source range of the expr.
@@ -149,27 +149,29 @@ private:
 };
 
 // We can't initialize the RewriterPtr until we get an ASTContext.
-Matcher::Matcher(const std::string &FilenameSuffix, const bool Pedantic,
-                 bool PublishSummary, bool DontExpandIncludes,
-                 std::vector<cli::ErrorOpts> ErrorOptions,
-                 std::vector<cli::FixOpts> FixOptions)
+inline Matcher::Matcher(const std::string &FilenameSuffix, const bool Pedantic,
+                        bool PublishSummary, bool DontExpandIncludes,
+                        std::vector<cli::ErrorOpts> ErrorOptions,
+                        std::vector<cli::FixOpts> FixOptions)
     : Rewriter(nullptr), FixItOptions(FilenameSuffix), Pedantic(Pedantic),
       PublishSummary(PublishSummary), TotalCasts(0),
       DontExpandIncludes(DontExpandIncludes),
       /* modify in ctr */ ErrMask(0),
       /* modify in ctr */ FixMask(0) {
-  for (unsigned i = 0; i != ErrorOptions.size(); i++) {
-    ErrMask |= ErrorOptions[i];
+  for (auto &ErrorBit : ErrorOptions) {
+    ErrMask |= ErrorBit;
   }
-  for (unsigned i = 0; i != FixOptions.size(); i++) {
-    FixMask |= FixOptions[i];
+  for (auto &FixBit : FixOptions) {
+    FixMask |= FixBit;
   }
 }
 
 // TODO: Is this okay to do?
-Matcher::~Matcher() {
+inline Matcher::~Matcher() {
   if (PublishSummary) {
-    for (auto const &[CXXCastKind, Freq] : Statistics) {
+    for (auto const &Pair : Statistics) {
+      const auto &CXXCastKind = Pair.first;
+      const auto &Freq = Pair.second;
       if (!Freq)
         continue;
       llvm::errs() << "The type " << cppCastToString(CXXCastKind)
@@ -188,10 +190,11 @@ Matcher::~Matcher() {
   }
 }
 
-CharSourceRange Matcher::getRangeForExpression(const Expr *Expression,
-                                               const ASTContext &Context) {
+inline CharSourceRange
+Matcher::getRangeForExpression(const Expr *Expression,
+                               const ASTContext &Context) {
   // Also expand on macros:
-  auto &Manager = Context.getSourceManager();
+  const auto &Manager = Context.getSourceManager();
 
   const ParenExpr *ParenExpression;
   while ((ParenExpression = dyn_cast<ParenExpr>(Expression))) {
@@ -205,9 +208,9 @@ CharSourceRange Matcher::getRangeForExpression(const Expr *Expression,
   return CharSourceRange::getCharRange(SourceRange{ExprStart, ExprEnd});
 }
 
-std::string Matcher::replaceExpression(const CStyleCastOperation &Op,
-                                       CXXCast CXXCastKind,
-                                       bool ConstCastRequired) {
+inline std::string Matcher::replaceExpression(const CStyleCastOperation &Op,
+                                              CXXCast CXXCastKind,
+                                              bool ConstCastRequired) {
   assert(CXXCastKind != CXXCast::CC_ConstCast &&
          "Const cast enum cannot be passed in as CXXCastKind");
   QualType CastType = Op.getCastType();
@@ -250,8 +253,8 @@ std::string Matcher::replaceExpression(const CStyleCastOperation &Op,
   }
 }
 
-bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
-                               const CStyleCastOperation &Op) {
+inline bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
+                                      const CStyleCastOperation &Op) {
   // No FixItRewriter should be set as consumer until we need to fix anything.
   setClient(ModifiableContext, /*Modify=*/false);
   const auto &Context = Op.getContext();
@@ -294,7 +297,7 @@ bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
 
   // TODO: the location pointer looks funky when the cast expression is
   // in a macro.
-  auto &Manager = Context.getSourceManager();
+  const auto &Manager = Context.getSourceManager();
   auto Level = (CurMask & ErrMask) ? DiagnosticsEngine::Error
                                    : DiagnosticsEngine::Warning;
   if (Manager.isMacroBodyExpansion(StartingLoc)) {
@@ -321,7 +324,7 @@ bool Matcher::reportDiagnostic(ASTContext *ModifiableContext,
   return Modify;
 }
 
-void Matcher::run(const MatchFinder::MatchResult &Result) {
+inline void Matcher::run(const MatchFinder::MatchResult &Result) {
   ASTContext *Context = Result.Context;
   auto &DiagEngine = Context->getDiagnostics();
 
@@ -349,9 +352,9 @@ void Matcher::run(const MatchFinder::MatchResult &Result) {
   }
 }
 
-void Matcher::checkForSymlinks(const SourceManager &Manager,
-                               const SourceLocation &Loc,
-                               DiagnosticsEngine &DiagEngine) {
+inline void Matcher::checkForSymlinks(const SourceManager &Manager,
+                                      const SourceLocation &Loc,
+                                      DiagnosticsEngine &DiagEngine) {
   const FileEntry *Entry = Manager.getFileEntryForID(Manager.getFileID(Loc));
   assert(Entry && "File entry cannot be null");
   const auto RealFilename = Entry->tryGetRealPathName();
@@ -366,7 +369,7 @@ void Matcher::checkForSymlinks(const SourceManager &Manager,
   }
 }
 
-void Matcher::setClient(clang::ASTContext *Context, bool Modify) {
+inline void Matcher::setClient(clang::ASTContext *Context, bool Modify) {
   auto &DiagEngine = Context->getDiagnostics();
   if (Modify) {
     // First time initializing, means that engine owns TDP.

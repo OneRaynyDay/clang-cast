@@ -139,9 +139,9 @@ struct ToolFactory : public clang::tooling::FrontendActionFactory {
 
 } // namespace clang
 
-int main(int argc, const char **argv) {
-  tooling::CommonOptionsParser op(argc, argv, cli::ClangCastCategory);
-  tooling::ClangTool Tool(op.getCompilations(), op.getSourcePathList());
+int main(int Argc, const char **Argv) {
+  tooling::CommonOptionsParser Op(Argc, Argv, cli::ClangCastCategory);
+  tooling::ClangTool Tool(Op.getCompilations(), Op.getSourcePathList());
   int ExitCode = Tool.run(new clang::cppcast::ToolFactory());
   return ExitCode;
 }

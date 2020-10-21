@@ -192,7 +192,7 @@ private:
   CXXCast getCastType(const CastExpr *CastExpression) const;
 };
 
-bool CStyleCastOperation::requireConstCast() const {
+inline bool CStyleCastOperation::requireConstCast() const {
   // Case 0 - We just cannot cast function pointers at the very beginning,
   // regardless of whether it's being downcasted or not.
   if (details::isFunctionPtr(CastType) || details::isFunctionPtr(SubExprType)) {
@@ -225,8 +225,9 @@ bool CStyleCastOperation::requireConstCast() const {
   return castAwayConst(ModifiedImpliedSubExprType, ModifiedCastType);
 }
 
-void CStyleCastOperation::warnMemberPointerClass(const QualType &SEType,
-                                                 const QualType &CType) const {
+inline void
+CStyleCastOperation::warnMemberPointerClass(const QualType &SEType,
+                                            const QualType &CType) const {
   // Auxilliary: If the member pointers classes are
   // not the same, issue a warning.
   if (SEType->isMemberPointerType() && CType->isMemberPointerType()) {
@@ -248,7 +249,7 @@ void CStyleCastOperation::warnMemberPointerClass(const QualType &SEType,
   }
 }
 
-void CStyleCastOperation::errorPedanticVLA(const QualType &T) const {
+inline void CStyleCastOperation::errorPedanticVLA(const QualType &T) const {
   if (!Pedantic)
     return;
   // Auxilliary: If the type is variable length arrays (VLA)s, it should raise
@@ -260,8 +261,8 @@ void CStyleCastOperation::errorPedanticVLA(const QualType &T) const {
   }
 }
 
-bool CStyleCastOperation::castAwayConst(const QualType &SEType,
-                                        const QualType &CType) const {
+inline bool CStyleCastOperation::castAwayConst(const QualType &SEType,
+                                               const QualType &CType) const {
   if (SEType.isMoreQualifiedThan(CType)) {
     return true;
   }
@@ -287,8 +288,9 @@ bool CStyleCastOperation::castAwayConst(const QualType &SEType,
   return castAwayConst(SEStrippedType, CStrippedType);
 }
 
-QualType CStyleCastOperation::changeQualifierHelper(QualType From,
-                                                    const QualType &To) const {
+inline QualType
+CStyleCastOperation::changeQualifierHelper(QualType From,
+                                           const QualType &To) const {
   // If it's a function pointer, then we don't change the qualifier and we've
   // reached the end.
   if (details::isFunctionPtr(From))
@@ -348,7 +350,7 @@ QualType CStyleCastOperation::changeQualifierHelper(QualType From,
   return From;
 }
 
-CXXCast CStyleCastOperation::castHelper(const Expr *Expression) const {
+inline CXXCast CStyleCastOperation::castHelper(const Expr *Expression) const {
   const auto *CastExpression = dyn_cast<CastExpr>(Expression);
 
   // Base case - we have reached an expression that's not a CastExpr
@@ -369,7 +371,8 @@ CXXCast CStyleCastOperation::castHelper(const Expr *Expression) const {
                   castHelper(CastExpression->getSubExpr()));
 }
 
-CXXCast CStyleCastOperation::getCastType(const CastExpr *CastExpression) const {
+inline CXXCast
+CStyleCastOperation::getCastType(const CastExpr *CastExpression) const {
   switch (CastExpression->getCastKind()) {
   /// No-op cast type
   case CastKind::CK_NoOp:

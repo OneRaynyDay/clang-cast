@@ -600,4 +600,4 @@ void f() {
 
 } // namespace testcases
 
-#endif // LLVM_PROJECT_CLANGQUALIFIERTESTCASES_H
+#endif

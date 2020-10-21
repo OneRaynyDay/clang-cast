@@ -23,8 +23,7 @@ namespace cppcast {
 class Consumer : public clang::ASTConsumer {
 public:
   template <typename... Args>
-  Consumer(Args&&... args)
-      : Handler(std::forward<Args>(args)...) {
+  Consumer(Args &&... AS) : Handler(std::forward<Args>(AS)...) {
     using namespace clang::ast_matchers;
     // TODO: Make this a constant instead of hardcode "cast"
     StatementMatcher CStyleCastMatcher = cStyleCastExpr().bind("cast");
@@ -40,7 +39,7 @@ private:
   clang::ast_matchers::MatchFinder MatchFinder;
 };
 
-}
-}
+} // namespace cppcast
+} // namespace clang
 
 #endif

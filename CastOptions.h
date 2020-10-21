@@ -11,8 +11,8 @@
 /// the Matcher object defined in Matcher.h.
 ///
 //===----------------------------------------------------------------------===//
-#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_OPTIONS_H
-#define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_OPTIONS_H
+#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CASTOPTIONS_H
+#define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CASTOPTIONS_H
 
 #include "clang/Rewrite/Frontend/FixItRewriter.h"
 #include <string>
@@ -107,7 +107,8 @@ namespace cppcast {
 /// generate in C++. If this enum is encountered, something is wrong.
 ///
 /// NOTE: We are using enums instead of enum-classes for the following reasons:
-/// - We can't use convenience functions from llvm CommandLine.h to define lists.
+/// - We can't use convenience functions from llvm CommandLine.h to define
+/// lists.
 /// - we want to make these these values bitmasks for inclusivity testing, and
 ///   there is no implicit conversion from enum-class values to integral types.
 enum CXXCast {
@@ -171,9 +172,9 @@ public:
     FixWhatYouCan = true;
   }
 
-  std::string RewriteFilename(const std::string &Filename, int &fd) override {
+  std::string RewriteFilename(const std::string &Filename, int &Fd) override {
     // Set fd to -1 to mean that the file descriptor is not yet opened.
-    fd = -1;
+    Fd = -1;
     const auto NewFilename = Filename + RewriteSuffix;
     return NewFilename;
   }

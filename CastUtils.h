@@ -11,8 +11,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_UTILS_H
-#define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CAST_UTILS_H
+#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CASTUTILS_H
+#define LLVM_CLANG_TOOLS_EXTRA_CLANG_CAST_CASTUTILS_H
 
 #include "CastOptions.h"
 #include "clang/AST/ASTContext.h"
@@ -23,7 +23,7 @@ namespace cppcast {
 
 /// Given a cast type enum of the form CXXCasts::CC_{type}, return the
 /// string representation of that respective type.
-std::string cppCastToString(const CXXCast &Cast) {
+inline std::string cppCastToString(const CXXCast &Cast) {
   switch (Cast) {
   case CXXCast::CC_ConstCast:
     return "const_cast";
@@ -42,6 +42,21 @@ std::string cppCastToString(const CXXCast &Cast) {
   }
 }
 
+namespace {
+
+template <typename Arg>
+DiagnosticBuilder reportHelper(DiagnosticBuilder &Builder, Arg &&A) {
+  return (Builder << std::forward<Arg>(A));
+}
+
+template <typename Arg, typename... Args>
+DiagnosticBuilder reportHelper(DiagnosticBuilder &Builder, Arg &&A,
+                               Args &&... AS) {
+  Builder << std::forward<Arg>(A);
+  return reportHelper(Builder, std::forward<Args>(AS)...);
+}
+
+} // namespace
 /// Reports messages with a source location, typically used to address
 /// specific code segments.
 ///
@@ -59,10 +74,11 @@ template <unsigned N, typename... Args>
 DiagnosticBuilder reportWithLoc(DiagnosticsEngine &Engine,
                                 const DiagnosticsEngine::Level &Level,
                                 const char (&FormatString)[N],
-                                const SourceLocation &Loc, Args &&... args) {
+                                const SourceLocation &Loc, Args &&... AS) {
   unsigned ID = Engine.getCustomDiagID(Level, FormatString);
-  // Binary left fold
-  return (Engine.Report(Loc, ID) << ... << std::forward<Args>(args));
+  // Binary left fold in C++14
+  auto Builder = Engine.Report(Loc, ID);
+  return reportHelper(Builder, std::forward<Args>(AS)...);
 }
 
 /// Reports messages, typically used to address a translation-unit/file wide
@@ -70,10 +86,10 @@ DiagnosticBuilder reportWithLoc(DiagnosticsEngine &Engine,
 template <unsigned N, typename... Args>
 DiagnosticBuilder report(DiagnosticsEngine &Engine,
                          DiagnosticsEngine::Level Level,
-                         const char (&FormatString)[N], Args &&... args) {
+                         const char (&FormatString)[N], Args &&... AS) {
   unsigned ID = Engine.getCustomDiagID(Level, FormatString);
-  // Binary left fold
-  return (Engine.Report(ID) << ... << std::forward<Args &&>(args));
+  auto Builder = Engine.Report(ID);
+  return reportHelper(Builder, std::forward<Args>(AS)...);
 }
 
 namespace details {
@@ -85,7 +101,8 @@ namespace details {
 /// \returns true if \p Base is accessible from \p Derived or are the same
 /// class, and false if \p Base is not accessible from \p Derived or are
 /// unrelated classes
-bool isAccessible(const CXXRecordDecl *Base, const CXXRecordDecl *Derived) {
+inline bool isAccessible(const CXXRecordDecl *Base,
+                         const CXXRecordDecl *Derived) {
   if (!Base || !Derived)
     return false;
 
@@ -114,8 +131,8 @@ bool isAccessible(const CXXRecordDecl *Base, const CXXRecordDecl *Derived) {
 /// \param Base the base class declaration
 /// \param Derived the derived class declaration
 /// \return CXXCast enum corresponding to the lowest power cast required.
-CXXCast getBaseDerivedCast(const CXXRecordDecl *Base,
-                           const CXXRecordDecl *Derived) {
+inline CXXCast getBaseDerivedCast(const CXXRecordDecl *Base,
+                                  const CXXRecordDecl *Derived) {
   assert(Base && Derived && "Base and Derived decls cannot be null.");
   if (!details::isAccessible(Base, Derived))
     return CXXCast::CC_CStyleCast;
@@ -128,7 +145,7 @@ CXXCast getBaseDerivedCast(const CXXRecordDecl *Base,
 /// \param T type to strip, assumed to be one of the above.
 /// \param Context, the ASTContext to create the array type edge case.
 /// \return type corresponding to \p T stripped of one indirection layer.
-QualType stripLayer(const QualType &T, const ASTContext &Context) {
+inline QualType stripLayer(const QualType &T, const ASTContext &Context) {
   if (T->isPointerType()) {
     const PointerType *PT = dyn_cast<PointerType>(T);
     return PT->getPointeeType();
@@ -147,7 +164,7 @@ QualType stripLayer(const QualType &T, const ASTContext &Context) {
 
 /// \param T some qualified type
 /// \return true if T is a function pointer
-bool isFunctionPtr(const QualType &T) {
+inline bool isFunctionPtr(const QualType &T) {
   return T->isMemberFunctionPointerType() || T->isFunctionPointerType();
 }
 
@@ -157,7 +174,7 @@ bool isFunctionPtr(const QualType &T) {
 /// pointer to an int member of struct t.
 /// - array / array of unknown bound, i.e. int a[2] and int a[], where the
 /// latter is likely a partial 'extern' type.
-bool isLocallySimilar(const QualType &A, const QualType &B) {
+inline bool isLocallySimilar(const QualType &A, const QualType &B) {
   bool AIsPtr = A->isPointerType();
   bool BIsPtr = B->isPointerType();
   bool AIsArr = A->isArrayType();
@@ -174,7 +191,7 @@ bool isLocallySimilar(const QualType &A, const QualType &B) {
 
 /// Either types are terminal if either one are not pointer-like types that
 /// can be traversed.
-bool isTerminal(const QualType &A, const QualType &B) {
+inline bool isTerminal(const QualType &A, const QualType &B) {
   bool AIsPtr = A->isPointerType();
   bool BIsPtr = B->isPointerType();
   bool AIsArr = A->isArrayType();

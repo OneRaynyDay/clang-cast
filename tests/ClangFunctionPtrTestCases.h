@@ -12,8 +12,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_PROJECT_CLANGFUNCTIONPTRTESTCASES_H
-#define LLVM_PROJECT_CLANGFUNCTIONPTRTESTCASES_H
+#ifndef LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGFUNCTIONPTRTESTCASES_H
+#define LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGFUNCTIONPTRTESTCASES_H
 
 namespace testcases {
 namespace funcptr {
@@ -68,4 +68,4 @@ void f() {
 } // namespace funcptr
 } // namespace testcases
 
-#endif // LLVM_PROJECT_CLANGFUNCTIONPTRTESTCASES_H
+#endif

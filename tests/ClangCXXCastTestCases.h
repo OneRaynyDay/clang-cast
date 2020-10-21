@@ -308,9 +308,10 @@ void f() {
 
 /// C-style cast types
 static const char Dependent[] = R"(
-template <typename T>
+template <typename T, typename U>
 void foo() {
-    (T) 0;
+  U x;
+  (T) x;
 }
 )";
 
@@ -336,4 +337,4 @@ A* foo(B *b) { return (A*)(b); }
 
 } // namespace testcases
 
-#endif // LLVM_CLANG_TOOLS_EXTRA_UNITTESTS_CLANG_CAST_CLANGCXXCASTTESTCASES_H
+#endif
