@@ -57,6 +57,7 @@ DiagnosticBuilder reportHelper(DiagnosticBuilder &Builder, Arg &&A,
 }
 
 } // namespace
+
 /// Reports messages with a source location, typically used to address
 /// specific code segments.
 ///
@@ -203,6 +204,38 @@ inline bool isTerminal(const QualType &A, const QualType &B) {
                     !(BIsPtr || BIsArr || BIsMemberPtr);
 
   return IsTerminal;
+}
+
+/// Some conversions have implicit conversions that aren't actually of no-op
+/// power. An example is:
+///
+/// CStyleCastExpr 'void *' <NoOp>
+/// `-ImplicitCastExpr 'void *' <BitCast> ...
+///  `-ImplicitCastExpr 'const int *' <LValueToRValue>
+///    `-DeclRefExpr 'const int *' lvalue 'const int *'
+///
+/// which is a BitCast conversion which is same power as reinterpret_cast.
+/// When we use the intermediate implicit converted type for testing for
+/// cast-away-constness, we don't want to include any non-implicit convertible
+/// things like BitCast.
+///
+/// \param Expression Expr type of the subexpression.
+/// \return QualType of the most implicit converted type
+inline QualType getImplicitConvertibleType(const Expr *Expression) {
+  const ImplicitCastExpr *ImplicitCastExpression =
+      dyn_cast<ImplicitCastExpr>(Expression);
+
+  while (ImplicitCastExpression &&
+         ImplicitCastExpression->isPartOfExplicitCast()) {
+    const auto &ImCastKind = ImplicitCastExpression->getCastKind();
+    if (ImCastKind == CastKind::CK_NoOp ||
+        ImCastKind == CastKind::CK_ArrayToPointerDecay ||
+        ImCastKind == CastKind::CK_LValueToRValue)
+      break;
+    Expression = ImplicitCastExpression->getSubExpr();
+    ImplicitCastExpression = dyn_cast<ImplicitCastExpr>(Expression);
+  }
+  return Expression->getType().getCanonicalType();
 }
 
 } // namespace details

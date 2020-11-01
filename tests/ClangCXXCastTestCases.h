@@ -130,11 +130,6 @@ void f() {
   (bool) nullptr;
 }
 )";
-static const char ToVoid[] = R"(
-void f() {
-  (void) 0;
-}
-)";
 static const char VectorSplat[] = R"(
 void f() {
   typedef float float4 __attribute__((ext_vector_type(4)));
@@ -307,6 +302,11 @@ void f() {
 )";
 
 /// C-style cast types
+static const char ToVoid[] = R"(
+void f() {
+  (void) 0;
+}
+)";
 static const char Dependent[] = R"(
 template <typename T, typename U>
 void foo() {

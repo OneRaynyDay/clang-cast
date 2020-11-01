@@ -155,6 +155,13 @@ void f() {
   int* y = (int*) x;
 }
 )";
+// Arthur O'Dwyer experienced this specific bug:
+static const char QualRemovePtrToConstVoid[] = R"(
+void f() {
+  const int *p {};
+  (void*) p;
+}
+)";
 static const char QualRemoveConstPtr[] = R"(
 void f() {
   int* const x = nullptr;

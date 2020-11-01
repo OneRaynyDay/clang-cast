@@ -98,7 +98,12 @@ public:
 
   /// public accessor methods, some of which return reference handles.
   QualType getSubExprType() const { return SubExprType; }
+  QualType getSubExprTypeAsWritten() const {
+    return MainExpr.getSubExprAsWritten()->getType();
+  }
   QualType getCastType() const { return CastType; }
+  QualType getCastTypeAsWritten() const { return MainExpr.getTypeAsWritten(); }
+
   const CStyleCastExpr &getCStyleCastExpr() const { return MainExpr; }
   const Expr &getSubExprAsWritten() const {
     return *MainExpr.getSubExprAsWritten();
@@ -145,7 +150,7 @@ public:
   /// is for function pointers. Const cast cannot change qualifiers on function
   /// pointers.
   QualType changeQualifiers() const {
-    return changeQualifierHelper(CastType, SubExprType);
+    return changeQualifierHelper(CastType, SubExprType, getCastTypeAsWritten());
   }
 
   /// Given the CStyleCastExpr, determine from its CastKind and other metadata
@@ -175,7 +180,8 @@ private:
   /// cast
   /// \param To, the SubExpression, which has specific qualifiers on it.
   /// \return QualType mirroring From but with qualifiers on To.
-  QualType changeQualifierHelper(QualType From, const QualType &To) const;
+  QualType changeQualifierHelper(QualType From, const QualType &To,
+                                 const QualType &TypedefFrom) const;
 
   /// Recurse CastExpr AST nodes until a non-cast expression has been reached.
   /// \return CXXCast enum corresponding to the lowest power cast required.
@@ -200,9 +206,10 @@ inline bool CStyleCastOperation::requireConstCast() const {
   }
 
   // We modify the types for references
-  // Note that for our subexpr type, we use the type post-implicit conv.
+  // Note that for our subexpr type, we use the type post-implicit conv, but
+  // only at the types that have implicit conversion powers.
   QualType ModifiedImpliedSubExprType =
-      MainExpr.getSubExpr()->getType().getCanonicalType();
+      details::getImplicitConvertibleType(MainExpr.getSubExpr());
   QualType ModifiedCastType = CastType;
 
   // Case 1 - reference type:
@@ -289,8 +296,8 @@ inline bool CStyleCastOperation::castAwayConst(const QualType &SEType,
 }
 
 inline QualType
-CStyleCastOperation::changeQualifierHelper(QualType From,
-                                           const QualType &To) const {
+CStyleCastOperation::changeQualifierHelper(QualType From, const QualType &To,
+                                           const QualType &TypedefFrom) const {
   // If it's a function pointer, then we don't change the qualifier and we've
   // reached the end.
   if (details::isFunctionPtr(From))
@@ -303,14 +310,17 @@ CStyleCastOperation::changeQualifierHelper(QualType From,
   // we've reached a non-similar stage.
   if ((!details::isLocallySimilar(From, To) && !Pedantic) ||
       details::isTerminal(From, To)) {
-    From.setLocalFastQualifiers(To.getLocalFastQualifiers());
-    return From;
+    QualType TypedefFromCopy(TypedefFrom);
+    TypedefFromCopy.setLocalFastQualifiers(To.getLocalFastQualifiers());
+    return TypedefFromCopy;
   }
 
   auto StrippedTo = details::stripLayer(To, Context);
   auto StrippedFrom = details::stripLayer(From, Context);
 
-  auto Temp = changeQualifierHelper(StrippedFrom, StrippedTo);
+  auto Temp = changeQualifierHelper(
+      StrippedFrom, StrippedTo,
+      details::stripLayer(TypedefFrom.getDesugaredType(Context), Context));
   // If they are locally similar and non-terminal, we can keep going down
   if (From->isPointerType()) {
     // modify the nested types
@@ -417,7 +427,6 @@ CStyleCastOperation::getCastType(const CastExpr *CastExpression) const {
   case CastKind::CK_UserDefinedConversion:
   case CastKind::CK_ConstructorConversion:
   case CastKind::CK_PointerToBoolean:
-  case CastKind::CK_ToVoid:
   // vector splats are constant size vectors that can be
   // broadcast assigned a single value.
   case CastKind::CK_VectorSplat:
@@ -464,7 +473,10 @@ CStyleCastOperation::getCastType(const CastExpr *CastExpression) const {
   case CastKind::CK_PointerToIntegral:
     return CXXCast::CC_ReinterpretCast;
 
-  // C style cast types
+  // C style cast type
+  // This is more of a semantics usage than a real cast. casting to
+  // void just means we won't use the member anymore. Let's keep it as it is.
+  case CastKind::CK_ToVoid:
   // Dependent types are left as they are.
   case CastKind::CK_Dependent:
     return CXXCast::CC_CStyleCast;
