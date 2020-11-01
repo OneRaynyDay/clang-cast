@@ -213,7 +213,6 @@ inline std::string Matcher::replaceExpression(const CStyleCastOperation &Op,
                                               bool ConstCastRequired) {
   assert(CXXCastKind != CXXCast::CC_ConstCast &&
          "Const cast enum cannot be passed in as CXXCastKind");
-  llvm::outs() << "CONST CAST REQUIRED? " << ConstCastRequired << "\n";
   QualType CastType = Op.getCastTypeAsWritten();
   const Expr &SubExpr = Op.getSubExprAsWritten();
   const ASTContext &Context = Op.getContext();
